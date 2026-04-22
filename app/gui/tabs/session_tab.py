@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
@@ -136,11 +137,11 @@ class SessionTab(QtWidgets.QWidget):
         self.demo_button.clicked.connect(self.demo_requested.emit)
         self.benchmark_button.clicked.connect(self.benchmark_requested.emit)
 
-        self.sample_rate_spin.valueChanged.connect(self.settings_changed.emit)
-        self.if_frequency_spin.valueChanged.connect(self.settings_changed.emit)
-        self.start_sample_spin.valueChanged.connect(self.settings_changed.emit)
-        self.sample_count_spin.valueChanged.connect(self.settings_changed.emit)
-        self.preload_checkbox.toggled.connect(self.settings_changed.emit)
+        self.sample_rate_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.if_frequency_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.start_sample_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.sample_count_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.preload_checkbox.toggled.connect(lambda *_: self.settings_changed.emit())
         self.baseband_checkbox.toggled.connect(self._on_baseband_toggled)
         self._on_baseband_toggled(self.baseband_checkbox.isChecked())
 
