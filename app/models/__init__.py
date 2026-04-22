@@ -10,6 +10,8 @@ from .session import (
     FileMetadata,
     NavigationDecodeResult,
     NavigationWord,
+    SearchCenterSweepEntry,
+    SearchCenterSweepResult,
     SessionConfig,
     TrackingState,
 )
@@ -24,6 +26,8 @@ __all__ = [
     "FileMetadata",
     "NavigationDecodeResult",
     "NavigationWord",
+    "SearchCenterSweepEntry",
+    "SearchCenterSweepResult",
     "SessionConfig",
     "TrackingState",
 ]

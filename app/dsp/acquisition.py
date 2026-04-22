@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 from app.dsp.gps_ca import sample_ca_code
-from app.models import AcquisitionCandidate, AcquisitionResult, SessionConfig
+from app.models import (
+    AcquisitionCandidate,
+    AcquisitionResult,
+    SearchCenterSweepEntry,
+    SearchCenterSweepResult,
+    SessionConfig,
+)
 
 
 @dataclass(slots=True)
@@ -170,3 +176,48 @@ def scan_prns_from_session(
     if progress_callback:
         progress_callback(100)
     return results
+
+
+def sweep_search_centers_from_session(
+    samples: np.ndarray,
+    session: SessionConfig,
+    search_centers_hz: list[float],
+    prns: list[int] | None = None,
+    progress_callback=None,
+    log_callback=None,
+) -> SearchCenterSweepResult:
+    """Sweep several IF / search-center hypotheses and rank the best one."""
+
+    centers = search_centers_hz or [0.0]
+    entries: list[SearchCenterSweepEntry] = []
+    total = max(len(centers), 1)
+
+    for center_index, center_hz in enumerate(centers):
+        local_session = replace(session)
+        local_session.is_baseband = abs(center_hz) < 1e-9
+        local_session.if_frequency_hz = float(center_hz)
+
+        def nested_progress(local_progress: int, *, base=center_index) -> None:
+            if progress_callback:
+                combined = int(((base + local_progress / 100.0) / total) * 100)
+                progress_callback(combined)
+
+        results = scan_prns_from_session(
+            samples,
+            local_session,
+            prns=prns,
+            progress_callback=nested_progress,
+            log_callback=None,
+        )
+        best = results[0]
+        entries.append(SearchCenterSweepEntry(search_center_hz=float(center_hz), best_result=best))
+        if log_callback:
+            log_callback(
+                f"Search-center sweep {center_hz:.1f} Hz: best PRN {best.prn}, "
+                f"metric {best.best_candidate.metric:.2f}, search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+            )
+
+    entries.sort(key=lambda item: item.best_result.best_candidate.metric, reverse=True)
+    if progress_callback:
+        progress_callback(100)
+    return SearchCenterSweepResult(entries=entries)

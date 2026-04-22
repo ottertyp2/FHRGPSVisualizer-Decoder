@@ -14,8 +14,10 @@ class AcquisitionTab(QtWidgets.QWidget):
 
     run_requested = QtCore.Signal()
     scan_requested = QtCore.Signal()
+    sweep_requested = QtCore.Signal()
     track_selected_requested = QtCore.Signal()
     selection_changed = QtCore.Signal(int)
+    sweep_selection_changed = QtCore.Signal(float, int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,6 +47,24 @@ class AcquisitionTab(QtWidgets.QWidget):
         controls.addRow("Doppler max [Hz]", self.doppler_max_spin)
         controls.addRow("Doppler step [Hz]", self.doppler_step_spin)
         layout.addLayout(controls)
+
+        sweep_group = QtWidgets.QGroupBox("Auto-search IF / center sweep")
+        sweep_layout = QtWidgets.QFormLayout(sweep_group)
+        self.center_min_spin = QtWidgets.QSpinBox()
+        self.center_min_spin.setRange(-100_000, 100_000)
+        self.center_min_spin.setValue(-10_000)
+        self.center_max_spin = QtWidgets.QSpinBox()
+        self.center_max_spin.setRange(-100_000, 100_000)
+        self.center_max_spin.setValue(10_000)
+        self.center_step_spin = QtWidgets.QSpinBox()
+        self.center_step_spin.setRange(100, 20_000)
+        self.center_step_spin.setValue(500)
+        self.center_sweep_button = QtWidgets.QPushButton("Sweep Search Center")
+        sweep_layout.addRow("Center min [Hz]", self.center_min_spin)
+        sweep_layout.addRow("Center max [Hz]", self.center_max_spin)
+        sweep_layout.addRow("Center step [Hz]", self.center_step_spin)
+        sweep_layout.addRow(self.center_sweep_button)
+        layout.addWidget(sweep_group)
 
         action_row = QtWidgets.QHBoxLayout()
         self.run_button = QtWidgets.QPushButton("Run Acquisition For PRN")
@@ -78,6 +98,12 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         right_panel = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_layout.addWidget(QtWidgets.QLabel("Best IF / search-center hypotheses"))
+        self.center_table = QtWidgets.QTableWidget(0, 5)
+        self.center_table.setHorizontalHeaderLabels(["Center [Hz]", "Best PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]"])
+        self.center_table.horizontalHeader().setStretchLastSection(True)
+        right_layout.addWidget(self.center_table, stretch=1)
+
         right_layout.addWidget(QtWidgets.QLabel("Detected / inspected satellites"))
         self.satellite_table = QtWidgets.QTableWidget(0, 6)
         self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Interpretation"])
@@ -96,8 +122,10 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         self.run_button.clicked.connect(self.run_requested.emit)
         self.scan_button.clicked.connect(self.scan_requested.emit)
+        self.center_sweep_button.clicked.connect(self.sweep_requested.emit)
         self.track_button.clicked.connect(self.track_selected_requested.emit)
         self.satellite_table.itemSelectionChanged.connect(self._emit_selection_changed)
+        self.center_table.itemSelectionChanged.connect(self._emit_sweep_selection_changed)
 
     def _emit_selection_changed(self) -> None:
         items = self.satellite_table.selectedItems()
@@ -170,3 +198,39 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         if results:
             self.satellite_table.selectRow(next((i for i, item in enumerate(results) if item.prn == result.prn), 0))
+
+    def update_sweep_results(self, sweep_entries) -> None:
+        """Show ranked IF / search-center hypotheses."""
+
+        self.center_table.setRowCount(len(sweep_entries))
+        for row, entry in enumerate(sweep_entries):
+            best = entry.best_result.best_candidate
+            self.center_table.setItem(row, 0, QtWidgets.QTableWidgetItem(f"{entry.search_center_hz:.1f}"))
+            self.center_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(entry.best_result.prn)))
+            self.center_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{best.metric:.2f}"))
+            self.center_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{best.carrier_frequency_hz:.1f}"))
+            self.center_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{best.doppler_hz:+.1f}"))
+        if sweep_entries:
+            self.center_table.selectRow(0)
+
+    def build_search_centers(self) -> list[float]:
+        """Return the configured sweep centers."""
+
+        start = int(self.center_min_spin.value())
+        stop = int(self.center_max_spin.value())
+        step = max(1, int(self.center_step_spin.value()))
+        if stop < start:
+            start, stop = stop, start
+        return [float(value) for value in range(start, stop + step, step)]
+
+    def _emit_sweep_selection_changed(self) -> None:
+        items = self.center_table.selectedItems()
+        if not items:
+            return
+        row = items[0].row()
+        try:
+            center_hz = float(self.center_table.item(row, 0).text())
+            prn = int(self.center_table.item(row, 1).text())
+        except (TypeError, ValueError, AttributeError):
+            return
+        self.sweep_selection_changed.emit(center_hz, prn)

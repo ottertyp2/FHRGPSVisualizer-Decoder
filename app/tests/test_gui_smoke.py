@@ -11,3 +11,4 @@ def test_main_window_smoke() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
     assert window.tabs.count() == 8
+    assert window.acquisition_tab.center_sweep_button.text() == "Sweep Search Center"
