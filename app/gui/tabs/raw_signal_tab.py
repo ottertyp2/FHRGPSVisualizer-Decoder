@@ -36,17 +36,21 @@ class RawSignalTab(QtWidgets.QWidget):
         self.decimation_label = QtWidgets.QLabel("")
         layout.addWidget(self.decimation_label)
 
-    def update_signal(self, samples: np.ndarray) -> None:
+    def update_signal(self, samples: np.ndarray, sample_rate: float) -> None:
         """Refresh the raw signal plots."""
 
         if samples.size == 0:
             return
         display, step = decimate_for_display(samples)
-        x = np.arange(display.size) * step
-        self.i_curve.setData(x, display.real)
-        self.q_curve.setData(x, display.imag)
-        self.mag_curve.setData(x, np.abs(display))
-        self.phase_curve.setData(x, np.angle(display))
+        time_axis = (np.arange(display.size, dtype=float) * step) / max(sample_rate, 1.0)
+        self.i_plot.setLabel("bottom", "Time", units="s")
+        self.q_plot.setLabel("bottom", "Time", units="s")
+        self.mag_plot.setLabel("bottom", "Time", units="s")
+        self.phase_plot.setLabel("bottom", "Time", units="s")
+        self.i_curve.setData(time_axis, display.real)
+        self.q_curve.setData(time_axis, display.imag)
+        self.mag_curve.setData(time_axis, np.abs(display))
+        self.phase_curve.setData(time_axis, np.angle(display))
         self.decimation_label.setText(
             "Display decimated for readability." if step > 1 else "Showing full selected window."
         )

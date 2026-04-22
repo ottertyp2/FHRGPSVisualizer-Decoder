@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtWidgets
 
 from app.dsp.acquisition import acquisition_from_session
 from app.dsp.acquisition import scan_prns_from_session
+from app.dsp.acquisition import sweep_search_centers_from_session
 from app.dsp.benchmark import run_benchmark
 from app.dsp.bitsync import extract_navigation_bits
 from app.dsp.demo import generate_demo_signal
@@ -36,6 +37,7 @@ from app.models import (
     DemoSignalResult,
     FileMetadata,
     NavigationDecodeResult,
+    SearchCenterSweepResult,
     SessionConfig,
     TrackingState,
 )
@@ -64,6 +66,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tracking_results_by_prn: dict[int, TrackingState] = {}
         self.bit_results_by_prn: dict[int, BitDecisionResult] = {}
         self.nav_results_by_prn: dict[int, NavigationDecodeResult] = {}
+        self.search_center_sweep_result: SearchCenterSweepResult | None = None
         self.selected_prn: int | None = None
 
         self.tabs = QtWidgets.QTabWidget()
@@ -100,8 +103,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session_tab.settings_changed.connect(self.update_ram_status)
         self.acquisition_tab.run_requested.connect(self.start_acquisition)
         self.acquisition_tab.scan_requested.connect(self.scan_all_prns)
+        self.acquisition_tab.sweep_requested.connect(self.start_search_center_sweep)
         self.acquisition_tab.track_selected_requested.connect(self.start_tracking)
         self.acquisition_tab.selection_changed.connect(self.set_selected_prn)
+        self.acquisition_tab.sweep_selection_changed.connect(self.apply_search_center_selection)
         self.tracking_tab.track_requested.connect(self.start_tracking)
         self.tracking_tab.decode_requested.connect(self.decode_navigation)
         self.tracking_tab.selection_changed.connect(self.set_selected_prn)
@@ -225,6 +230,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tracking_tab.set_available_prns(self.available_prns(), prn)
         self.navigation_tab.set_available_prns(self.available_prns(with_tracking=True), prn)
         self.refresh_satellite_views()
+
+    def apply_search_center_selection(self, center_hz: float, prn: int) -> None:
+        """Apply one IF / search-center hypothesis from the sweep table."""
+
+        if abs(center_hz) < 1e-9:
+            self.session_tab.baseband_checkbox.setChecked(True)
+        else:
+            self.session_tab.baseband_checkbox.setChecked(False)
+            self.session_tab.if_frequency_spin.setValue(center_hz)
+        self.set_selected_prn(prn)
+        self.append_log(
+            f"Applied search-center hypothesis: center {center_hz:.1f} Hz, PRN {prn}."
+        )
 
     def available_prns(self, with_tracking: bool = False) -> list[int]:
         """Return the currently known PRNs."""
@@ -387,7 +405,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_passive_views(self, samples: np.ndarray) -> None:
         """Refresh plots that only depend on the selected sample window."""
 
-        self.raw_tab.update_signal(samples)
+        self.raw_tab.update_signal(samples, self.session.sample_rate)
         acquisition = self.acquisition_results_by_prn.get(self.selected_prn) if self.selected_prn is not None else self.acquisition_result
         self.spectrum_tab.update_signal(samples, self.session.sample_rate, session=self.session, acquisition=acquisition)
         self.iq_tab.set_sources({"Raw IQ": samples})
@@ -438,6 +456,27 @@ class MainWindow(QtWidgets.QMainWindow):
         samples = self.load_acquisition_samples()
         worker = Worker(acquisition_from_session, samples, self.session)
         self._start_worker(worker, self._on_acquisition_finished)
+
+    def start_search_center_sweep(self) -> None:
+        """Try multiple IF / search-center hypotheses automatically."""
+
+        self.sync_session_from_ui()
+        full_samples = self.ensure_samples()
+        if full_samples.size == 0:
+            return
+        display_samples = full_samples[: min(full_samples.size, 500_000)]
+        self.current_display_samples = display_samples
+        self.update_passive_views(display_samples)
+        samples = self.load_acquisition_samples()
+        centers = self.acquisition_tab.build_search_centers()
+        worker = Worker(
+            sweep_search_centers_from_session,
+            samples,
+            self.session,
+            centers,
+            list(range(1, 33)),
+        )
+        self._start_worker(worker, self._on_search_center_sweep_finished)
 
     def scan_all_prns(self) -> None:
         """Run acquisition over PRNs 1..32 for a more intuitive satellite overview."""
@@ -512,6 +551,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.append_log(f"PRN scan finished. Ranked {len(results)} satellite hypotheses.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
+    def _on_search_center_sweep_finished(self, result: SearchCenterSweepResult) -> None:
+        self.search_center_sweep_result = result
+        self.acquisition_tab.update_sweep_results(result.entries)
+        if result.entries:
+            best_entry = result.entries[0]
+            self.apply_search_center_selection(best_entry.search_center_hz, best_entry.best_result.prn)
+            self.acquisition_result = best_entry.best_result
+            self.acquisition_results_by_prn[best_entry.best_result.prn] = best_entry.best_result
+            self.refresh_satellite_views()
+            self.append_log(
+                f"Search-center sweep finished. Best center is {best_entry.search_center_hz:.1f} Hz "
+                f"with PRN {best_entry.best_result.prn} and metric {best_entry.best_result.best_candidate.metric:.2f}."
+            )
+        else:
+            self.append_log("Search-center sweep finished, but no candidates were produced.")
+        self.session_tab.set_progress(100)
+        self.tabs.setCurrentWidget(self.acquisition_tab)
+
     def start_tracking(self) -> None:
         """Launch tracking from the current acquisition result."""
 
@@ -582,6 +639,7 @@ class MainWindow(QtWidgets.QMainWindow):
             file_size_bytes=int(demo.samples.nbytes),
             data_type="complex64",
             endianness="little",
+            sample_rate_hz=float(demo.sample_rate),
             total_samples=demo.samples.size,
             estimated_duration_s=demo.samples.size / demo.sample_rate,
             preview_stats={

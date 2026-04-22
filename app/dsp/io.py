@@ -36,6 +36,7 @@ def inspect_complex64_file(
         file_size_bytes=size_bytes,
         data_type="complex64",
         endianness="little",
+        sample_rate_hz=float(sample_rate),
         total_samples=total_samples,
         estimated_duration_s=(total_samples / sample_rate) if sample_rate > 0 else 0.0,
         preview_stats=preview_stats,

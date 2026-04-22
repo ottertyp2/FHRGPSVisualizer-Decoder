@@ -118,6 +118,8 @@ class SessionTab(QtWidgets.QWidget):
 
         self.preview_plot = pg.PlotWidget(title="Preview magnitude")
         self.preview_plot.setToolTip(TOOLTIPS["spectrum"])
+        self.preview_plot.setLabel("bottom", "Time", units="s")
+        self.preview_plot.setLabel("left", "Magnitude")
         self.preview_curve = self.preview_plot.plot(pen="y")
         layout.addWidget(self.preview_plot, stretch=1)
 
@@ -188,7 +190,8 @@ class SessionTab(QtWidgets.QWidget):
             self.start_sample_spin.setMaximum(metadata.total_samples - 1)
             self.sample_count_spin.setMaximum(metadata.total_samples)
         if metadata.preview_samples.size:
-            self.preview_curve.setData(abs(metadata.preview_samples))
+            time_axis = np.arange(metadata.preview_samples.size, dtype=float) / max(metadata.sample_rate_hz, 1.0)
+            self.preview_curve.setData(time_axis, abs(metadata.preview_samples))
 
     def append_log(self, message: str) -> None:
         self.log_edit.appendPlainText(message)

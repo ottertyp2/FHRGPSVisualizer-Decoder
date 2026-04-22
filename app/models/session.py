@@ -41,6 +41,7 @@ class FileMetadata:
     file_size_bytes: int
     data_type: str
     endianness: str
+    sample_rate_hz: float
     total_samples: int
     estimated_duration_s: float
     preview_stats: dict[str, float] = field(default_factory=dict)
@@ -69,6 +70,21 @@ class AcquisitionResult:
     heatmap: np.ndarray
     best_candidate: AcquisitionCandidate
     candidates: list[AcquisitionCandidate] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SearchCenterSweepEntry:
+    """Best acquisition outcome for one searched IF / search-center hypothesis."""
+
+    search_center_hz: float
+    best_result: AcquisitionResult
+
+
+@dataclass(slots=True)
+class SearchCenterSweepResult:
+    """Ranked results from sweeping multiple IF / search-center hypotheses."""
+
+    entries: list[SearchCenterSweepEntry] = field(default_factory=list)
 
 
 @dataclass(slots=True)
