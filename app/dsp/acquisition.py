@@ -125,3 +125,40 @@ def acquisition_from_session(
         integration_ms=session.integration_ms,
     )
     return acquire_signal(samples, config, progress_callback=progress_callback, log_callback=log_callback)
+
+
+def scan_prns_from_session(
+    samples: np.ndarray,
+    session: SessionConfig,
+    prns: list[int] | None = None,
+    progress_callback=None,
+    log_callback=None,
+) -> list[AcquisitionResult]:
+    """Run acquisition for multiple PRNs and return the per-satellite results."""
+
+    prn_list = prns or list(range(1, 33))
+    results: list[AcquisitionResult] = []
+    total = max(len(prn_list), 1)
+
+    for index, prn in enumerate(prn_list):
+        config = AcquisitionConfig(
+            sample_rate=session.sample_rate,
+            prn=prn,
+            doppler_min=session.doppler_min,
+            doppler_max=session.doppler_max,
+            doppler_step=session.doppler_step,
+            integration_ms=session.integration_ms,
+        )
+
+        def nested_progress(local_progress: int, *, base=index) -> None:
+            if progress_callback:
+                combined = int(((base + local_progress / 100.0) / total) * 100)
+                progress_callback(combined)
+
+        result = acquire_signal(samples, config, progress_callback=nested_progress, log_callback=log_callback)
+        results.append(result)
+
+    results.sort(key=lambda item: item.best_candidate.metric, reverse=True)
+    if progress_callback:
+        progress_callback(100)
+    return results

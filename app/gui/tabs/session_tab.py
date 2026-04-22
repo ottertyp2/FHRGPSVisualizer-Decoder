@@ -19,6 +19,7 @@ class SessionTab(QtWidgets.QWidget):
     decode_requested = QtCore.Signal()
     demo_requested = QtCore.Signal()
     benchmark_requested = QtCore.Signal()
+    settings_changed = QtCore.Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -50,6 +51,12 @@ class SessionTab(QtWidgets.QWidget):
         self.sample_count_spin = QtWidgets.QSpinBox()
         self.sample_count_spin.setRange(1_000, 2_000_000_000)
         self.sample_count_spin.setValue(4_092_000)
+        self.preload_checkbox = QtWidgets.QCheckBox("Preload full window to RAM")
+        self.preload_checkbox.setChecked(True)
+        self.preload_checkbox.setToolTip(
+            "If enabled, the tool loads the complete selected source into RAM before analysis. "
+            "If disabled, only the active analysis window is loaded on demand."
+        )
 
         form.addRow("File", self.file_edit)
         form.addRow("Sample rate", self.sample_rate_spin)
@@ -57,6 +64,7 @@ class SessionTab(QtWidgets.QWidget):
         form.addRow("Signal mode", self.baseband_checkbox)
         form.addRow("Start sample", self.start_sample_spin)
         form.addRow("Window samples", self.sample_count_spin)
+        form.addRow("RAM preload", self.preload_checkbox)
         layout.addLayout(form)
 
         button_row = QtWidgets.QHBoxLayout()
@@ -84,10 +92,14 @@ class SessionTab(QtWidgets.QWidget):
         layout.addWidget(self.metadata_label)
 
         self.large_file_label = QtWidgets.QLabel(
-            "Large-file mode: the app only loads selected windows for display and streams tracking block-by-block."
+            "RAM mode: after you start analysis, the complete IQ file is loaded into RAM once and all views work from that in-memory copy."
         )
         self.large_file_label.setWordWrap(True)
         layout.addWidget(self.large_file_label)
+
+        self.ram_status_label = QtWidgets.QLabel("RAM status: no source selected.")
+        self.ram_status_label.setWordWrap(True)
+        layout.addWidget(self.ram_status_label)
 
         self.progress_bar = QtWidgets.QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -111,6 +123,21 @@ class SessionTab(QtWidgets.QWidget):
         self.decode_button.clicked.connect(self.decode_requested.emit)
         self.demo_button.clicked.connect(self.demo_requested.emit)
         self.benchmark_button.clicked.connect(self.benchmark_requested.emit)
+
+        self.sample_rate_spin.valueChanged.connect(self.settings_changed.emit)
+        self.start_sample_spin.valueChanged.connect(self.settings_changed.emit)
+        self.sample_count_spin.valueChanged.connect(self.settings_changed.emit)
+        self.preload_checkbox.toggled.connect(self.settings_changed.emit)
+
+    def preload_enabled(self) -> bool:
+        """Return whether preload mode is enabled."""
+
+        return self.preload_checkbox.isChecked()
+
+    def set_ram_status(self, text: str) -> None:
+        """Show RAM usage and load-policy information."""
+
+        self.ram_status_label.setText(text)
 
     def get_session_config(self) -> SessionConfig:
         """Build a session config from the current UI state."""

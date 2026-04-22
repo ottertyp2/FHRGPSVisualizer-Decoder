@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
 from app.dsp.utils import TOOLTIPS, bits_to_str
-from app.models import BitDecisionResult, NavigationDecodeResult
+from app.models import AcquisitionResult, BitDecisionResult, NavigationDecodeResult, TrackingState
 
 
 class NavigationTab(QtWidgets.QWidget):
     """Display 1 ms prompt values, bit sums, and LNAV words."""
+
+    decode_requested = QtCore.Signal()
+    selection_changed = QtCore.Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -22,9 +25,24 @@ class NavigationTab(QtWidgets.QWidget):
         help_label.setWordWrap(True)
         layout.addWidget(help_label)
 
+        control_row = QtWidgets.QHBoxLayout()
+        self.prn_combo = QtWidgets.QComboBox()
+        self.prn_combo.addItem("No PRN")
+        self.decode_button = QtWidgets.QPushButton("Decode Selected PRN")
+        control_row.addWidget(QtWidgets.QLabel("Satellite / PRN"))
+        control_row.addWidget(self.prn_combo)
+        control_row.addWidget(self.decode_button)
+        control_row.addStretch()
+        layout.addLayout(control_row)
+
         self.summary_label = QtWidgets.QLabel("Navigation decoding not started.")
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
+
+        self.evidence_text = QtWidgets.QPlainTextEdit()
+        self.evidence_text.setReadOnly(True)
+        self.evidence_text.setMaximumHeight(150)
+        layout.addWidget(self.evidence_text)
 
         self.prompt_plot = pg.PlotWidget(title="1 ms prompt values")
         self.prompt_curve = self.prompt_plot.plot(pen="c")
@@ -43,17 +61,67 @@ class NavigationTab(QtWidgets.QWidget):
         self.word_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.word_table, stretch=1)
 
-    def update_results(self, bit_result: BitDecisionResult, nav_result: NavigationDecodeResult) -> None:
+        self.decode_button.clicked.connect(self.decode_requested.emit)
+        self.prn_combo.currentIndexChanged.connect(self._emit_selection_changed)
+
+    def _emit_selection_changed(self) -> None:
+        data = self.prn_combo.currentData()
+        if data is None:
+            return
+        self.selection_changed.emit(int(data))
+
+    def set_available_prns(self, prns: list[int], selected_prn: int | None = None) -> None:
+        """Refresh the per-satellite navigation selector."""
+
+        self.prn_combo.blockSignals(True)
+        self.prn_combo.clear()
+        if not prns:
+            self.prn_combo.addItem("No PRN", None)
+        for prn in sorted(prns):
+            self.prn_combo.addItem(f"PRN {prn}", prn)
+        if selected_prn is not None:
+            index = self.prn_combo.findData(selected_prn)
+            if index >= 0:
+                self.prn_combo.setCurrentIndex(index)
+        self.prn_combo.blockSignals(False)
+
+    def update_results(
+        self,
+        bit_result: BitDecisionResult,
+        nav_result: NavigationDecodeResult,
+        prn: int,
+        acquisition: AcquisitionResult | None = None,
+        tracking: TrackingState | None = None,
+    ) -> None:
         """Refresh the bit and LNAV views."""
 
+        self.set_available_prns([prn], prn)
         self.summary_label.setText(
-            f"Bit offset: {bit_result.best_offset_ms} ms, "
+            f"PRN {prn}: bit offset {bit_result.best_offset_ms} ms, "
             f"{bit_result.bit_values.size} hard decisions, "
             f"{len(nav_result.preamble_indices)} preambles, "
             f"{nav_result.parity_ok_count} words with valid parity."
         )
         self.prompt_curve.setData(np.arange(bit_result.prompt_ms.size), bit_result.prompt_ms)
         self.bit_curve.setData(np.arange(bit_result.bit_sums.size), bit_result.bit_sums)
+        evidence_lines = []
+        if acquisition is not None:
+            evidence_lines.append(
+                f"Started from acquisition peak at {acquisition.best_candidate.doppler_hz:.1f} Hz and code phase {acquisition.best_candidate.code_phase_samples}."
+            )
+        if tracking is not None:
+            evidence_lines.append(
+                f"Tracking {'locked' if tracking.lock_detected else 'did not fully lock'} with average lock metric {float(tracking.lock_metric.mean()):.2f}."
+            )
+        evidence_lines.extend(
+            [
+                f"20 ms integration offset: {bit_result.best_offset_ms} ms",
+                f"Detected preambles: {len(nav_result.preamble_indices)}",
+                f"Parity-valid words: {nav_result.parity_ok_count}",
+                "Interpretation: this view shows the actual bit stream that was formed after despreading and tracking for the selected PRN only.",
+            ]
+        )
+        self.evidence_text.setPlainText("\n".join(evidence_lines))
         preview_lines = [
             f"Bit decisions: {bits_to_str(bit_result.bit_values[:200])}",
             "",

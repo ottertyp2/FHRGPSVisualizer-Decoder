@@ -7,6 +7,7 @@ Agents working here should preserve the project's core priorities:
 
 - clear and didactic DSP implementation
 - responsive GUI for offline inspection
+- visual separation of PRN- and satellite-specific evidence through the workflow
 - clean separation between GUI, DSP, models, and tests
 - support for large recordings through windowed reads and streaming
 - no PVT or position solution unless explicitly added later
@@ -24,10 +25,11 @@ Agents working here should preserve the project's core priorities:
 - Keep the app runnable with `python -m app.main`.
 - Prefer understandable implementations over black-box optimizations.
 - Keep GUI code and DSP code separate; do not bury signal-processing logic inside widgets.
-- When handling large recordings, avoid loading whole files into memory when a streamed or windowed approach is possible.
+- When handling large recordings, support both RAM-preload and bounded-window workflows; keep the user-visible mode clear in the GUI.
 - Treat `complex64` little-endian IQ as the current baseline input format unless the repo is explicitly extended.
 - Do not add position solving, maps, or full PVT implicitly.
 - Preserve the benchmark path so laptop suitability remains visible inside the GUI.
+- Keep PRN-specific acquisition, tracking, and navigation evidence understandable and visually separated when possible.
 - Add or update tests for new DSP behavior whenever practical.
 
 ## Git and release hygiene

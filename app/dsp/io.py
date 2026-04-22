@@ -54,6 +54,68 @@ def load_complex64_samples(file_path: str, start_sample: int, sample_count: int)
         return np.fromfile(handle, dtype=dtype, count=count)
 
 
+def load_complex64_samples_with_progress(
+    file_path: str,
+    start_sample: int,
+    sample_count: int,
+    progress_callback=None,
+    chunk_samples: int = 2_000_000,
+) -> np.ndarray:
+    """Load a sample window in chunks and emit progress updates."""
+
+    dtype = np.dtype(np.complex64)
+    count = max(0, int(sample_count))
+    if count == 0:
+        if progress_callback:
+            progress_callback(100)
+        return np.empty(0, dtype=dtype)
+
+    if progress_callback is None or count <= chunk_samples:
+        result = load_complex64_samples(file_path, start_sample, count)
+        if progress_callback:
+            progress_callback(100)
+        return result
+
+    result = np.empty(count, dtype=dtype)
+    offset = max(0, int(start_sample)) * dtype.itemsize
+    loaded = 0
+    with Path(file_path).open("rb") as handle:
+        handle.seek(offset)
+        while loaded < count:
+            chunk = min(chunk_samples, count - loaded)
+            data = np.fromfile(handle, dtype=dtype, count=chunk)
+            if data.size == 0:
+                break
+            result[loaded : loaded + data.size] = data
+            loaded += data.size
+            if progress_callback:
+                progress_callback(int(100 * loaded / count))
+    return result[:loaded]
+
+
+def load_complex64_file(file_path: str) -> np.ndarray:
+    """Load an entire complex64 raw file into RAM."""
+
+    return np.fromfile(Path(file_path), dtype=np.complex64)
+
+
+def load_complex64_file_with_progress(
+    file_path: str,
+    progress_callback=None,
+    chunk_samples: int = 2_000_000,
+) -> np.ndarray:
+    """Load an entire complex64 raw file into RAM with progress updates."""
+
+    total_samples = Path(file_path).stat().st_size // np.dtype(np.complex64).itemsize
+    return load_complex64_samples_with_progress(
+        file_path,
+        start_sample=0,
+        sample_count=total_samples,
+        progress_callback=progress_callback,
+        chunk_samples=chunk_samples,
+    )
+
+
 class Complex64FileSource:
     """Memory-mapped windowed reader for very large complex64 IQ files."""
 

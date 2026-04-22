@@ -9,6 +9,8 @@ An educational offline analysis tool for recorded GPS L1 C/A IQ data. The first 
 - 50 bps bit extraction from 1 ms prompt integrations
 - LNAV preamble detection, word sync, and parity checks
 - laptop benchmark for large-recording suitability and bottleneck detection
+- per-PRN satellite-oriented views so acquisition, tracking, and decoded bits can be inspected separately
+- configurable RAM loading with full-source preload, RAM status display, warnings, and progress dialog
 
 This version intentionally does **not** compute position, pseudoranges, or a full PVT solution.
 
@@ -20,6 +22,13 @@ This version intentionally does **not** compute position, pseudoranges, or a ful
 - For multi-gigabyte files, a RAM disk can still help throughput, but the tool does not require the entire file to fit in memory.
 - The benchmark measures windowed reads, sequential streaming, FFT throughput, acquisition cost, and tracking cost.
 - The slowest measured subsystem is marked as the bottleneck and compared against 6 MSa/s.
+
+## RAM loading modes
+
+- The session tab shows a RAM status line with planned load size and available system RAM.
+- `Preload full window to RAM` can be enabled to load the complete source before DSP starts.
+- If disabled, the tool loads only the selected analysis window.
+- Large RAM loads trigger a warning and use a progress dialog with cancel support.
 
 ## Quick start
 
@@ -37,9 +46,10 @@ python -m app.main
 3. Enter the sample rate and center frequency manually.
 4. Preview a selected window.
 5. Run acquisition for a PRN.
-6. Start tracking from the best acquisition candidate.
-7. Decode navigation bits and inspect LNAV word sync.
-8. Run the benchmark to estimate how well the laptop handles large recordings.
+6. Optionally scan PRNs 1..32 to rank likely visible satellites.
+7. Start tracking for the selected PRN from the acquisition tab or tracking tab.
+8. Decode navigation bits and inspect LNAV word sync for that PRN.
+9. Run the benchmark to estimate how well the laptop handles large recordings.
 
 ## Notes on input
 

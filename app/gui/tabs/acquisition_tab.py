@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import numpy as np
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
 from app.dsp.utils import TOOLTIPS
@@ -12,6 +11,11 @@ from app.models import AcquisitionResult
 
 class AcquisitionTab(QtWidgets.QWidget):
     """PRN selection and acquisition heatmap tab."""
+
+    run_requested = QtCore.Signal()
+    scan_requested = QtCore.Signal()
+    track_selected_requested = QtCore.Signal()
+    selection_changed = QtCore.Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,28 +46,78 @@ class AcquisitionTab(QtWidgets.QWidget):
         controls.addRow("Doppler step [Hz]", self.doppler_step_spin)
         layout.addLayout(controls)
 
-        self.summary_label = QtWidgets.QLabel("No acquisition result.")
+        action_row = QtWidgets.QHBoxLayout()
+        self.run_button = QtWidgets.QPushButton("Run Acquisition For PRN")
+        self.scan_button = QtWidgets.QPushButton("Scan PRNs 1-32")
+        self.track_button = QtWidgets.QPushButton("Track Highlighted PRN")
+        action_row.addWidget(self.run_button)
+        action_row.addWidget(self.scan_button)
+        action_row.addWidget(self.track_button)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+
+        self.summary_label = QtWidgets.QLabel("No acquisition result yet. Run one PRN or scan multiple PRNs.")
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
+        splitter = QtWidgets.QSplitter()
+        splitter.setOrientation(QtCore.Qt.Horizontal)
+
+        left_panel = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
         self.heatmap_plot = pg.PlotWidget(title="Code phase vs Doppler")
         self.heatmap_image = pg.ImageItem()
         self.heatmap_plot.addItem(self.heatmap_image)
-        layout.addWidget(self.heatmap_plot, stretch=1)
+        left_layout.addWidget(self.heatmap_plot, stretch=1)
 
-        self.candidate_table = QtWidgets.QTableWidget(0, 3)
-        self.candidate_table.setHorizontalHeaderLabels(["PRN", "Doppler [Hz]", "Metric"])
+        self.candidate_table = QtWidgets.QTableWidget(0, 4)
+        self.candidate_table.setHorizontalHeaderLabels(["PRN", "Doppler [Hz]", "Code phase", "Metric"])
         self.candidate_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.candidate_table, stretch=1)
+        left_layout.addWidget(self.candidate_table, stretch=1)
+        splitter.addWidget(left_panel)
 
-    def update_result(self, result: AcquisitionResult) -> None:
+        right_panel = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_layout.addWidget(QtWidgets.QLabel("Detected / inspected satellites"))
+        self.satellite_table = QtWidgets.QTableWidget(0, 5)
+        self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Doppler [Hz]", "Code phase", "Interpretation"])
+        self.satellite_table.horizontalHeader().setStretchLastSection(True)
+        right_layout.addWidget(self.satellite_table, stretch=1)
+
+        right_layout.addWidget(QtWidgets.QLabel("Why this looks like one satellite"))
+        self.evidence_text = QtWidgets.QPlainTextEdit()
+        self.evidence_text.setReadOnly(True)
+        right_layout.addWidget(self.evidence_text, stretch=1)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        layout.addWidget(splitter, stretch=1)
+
+        self.run_button.clicked.connect(self.run_requested.emit)
+        self.scan_button.clicked.connect(self.scan_requested.emit)
+        self.track_button.clicked.connect(self.track_selected_requested.emit)
+        self.satellite_table.itemSelectionChanged.connect(self._emit_selection_changed)
+
+    def _emit_selection_changed(self) -> None:
+        items = self.satellite_table.selectedItems()
+        if not items:
+            return
+        try:
+            prn = int(self.satellite_table.item(items[0].row(), 0).text())
+        except (TypeError, ValueError, AttributeError):
+            return
+        self.selection_changed.emit(prn)
+
+    def update_result(self, result: AcquisitionResult, total_results: list[AcquisitionResult] | None = None) -> None:
         """Populate the heatmap and candidate table."""
 
         self.summary_label.setText(
             f"Best peak: PRN {result.best_candidate.prn}, "
             f"Doppler {result.best_candidate.doppler_hz:.1f} Hz, "
             f"code phase {result.best_candidate.code_phase_samples} samples, "
-            f"metric {result.best_candidate.metric:.2f}"
+            f"metric {result.best_candidate.metric:.2f}. "
+            "A strong, isolated peak means the local PRN aligns well with the recording."
         )
         self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
         rect = pg.QtCore.QRectF(
@@ -77,4 +131,36 @@ class AcquisitionTab(QtWidgets.QWidget):
         for row, candidate in enumerate(result.candidates):
             self.candidate_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
             self.candidate_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:.1f}"))
-            self.candidate_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
+            self.candidate_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
+            self.candidate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
+
+        results = total_results or [result]
+        self.satellite_table.setRowCount(len(results))
+        for row, sat_result in enumerate(results):
+            candidate = sat_result.best_candidate
+            interpretation = "likely visible" if candidate.metric >= 6.0 else "weak / uncertain"
+            self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
+            self.satellite_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
+            self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:.1f}"))
+            self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
+            self.satellite_table.setItem(row, 4, QtWidgets.QTableWidgetItem(interpretation))
+
+        self.evidence_text.setPlainText(
+            "\n".join(
+                [
+                    f"Selected PRN: {result.prn}",
+                    f"Best Doppler bin: {result.best_candidate.doppler_hz:.1f} Hz",
+                    f"Best code phase: {result.best_candidate.code_phase_samples} samples",
+                    f"Peak metric: {result.best_candidate.metric:.2f}",
+                    "",
+                    "Interpretation:",
+                    "- The brighter the heatmap peak, the better the local PRN matches the signal.",
+                    "- Doppler tells you how much carrier offset had to be removed.",
+                    "- Code phase tells you where the PRN alignment happens within the 1 ms code.",
+                    "- The top candidates below show whether one peak dominates or the result is ambiguous.",
+                ]
+            )
+        )
+
+        if results:
+            self.satellite_table.selectRow(next((i for i, item in enumerate(results) if item.prn == result.prn), 0))
