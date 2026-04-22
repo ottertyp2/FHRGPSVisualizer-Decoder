@@ -40,6 +40,11 @@ Agents working here should preserve the project's core priorities:
 - Keep `README.md`, `requirements.txt`, and this file aligned with major feature changes.
 - If a change affects workflow or repository conventions, update `AGENTS.md`.
 - Prefer small, reviewable commits with clear messages.
+- Treat GitHub and GitLab as first-class remotes for this project and keep them in sync.
+- After finishing a change that is ready to share, agents should commit the intended files and push the same branch/commit to both hosted repositories.
+- Prefer keeping `origin` configured with both push URLs so one clean `git push origin <branch>` updates GitHub and GitLab together.
+- Do not push partial, broken, or unrelated work just to satisfy the sync rule; stage and commit only the files that belong to the task being delivered.
+- If one remote push fails, report it clearly so the repository state can be corrected instead of assuming both hosts were updated.
 
 ## Large-file policy
 

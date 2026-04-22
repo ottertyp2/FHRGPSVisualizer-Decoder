@@ -1,80 +1,240 @@
 # GPS L1 C/A Offline Decoder GUI
 
-An educational offline analysis tool for recorded GPS L1 C/A IQ data. The first version focuses on:
+An educational desktop tool for inspecting recorded GPS L1 C/A IQ data offline.
 
-- file loading for `complex64` IQ (`float32 I + float32 Q`)
-- raw signal, spectrum, waterfall, and IQ-plane visualization
-- PRN acquisition over Doppler and code phase
-- segment-consistency scoring so repeated weak PRN hits can be separated from one-off noise peaks
-- automatic survey of common GNSS sample-rate hypotheses for uncertain captures
+The project is built to make the decoding chain understandable end to end:
+
+- inspect a recorded IQ file without loading the whole capture blindly
+- visualize raw signal, spectrum, waterfall, and IQ behavior
+- acquire GPS PRNs over Doppler and code phase
+- separate believable satellite evidence from one-off noise peaks
+- track a selected PRN with readable loop-state plots
+- extract 50 bps navigation bits and inspect LNAV framing/parity
+- benchmark whether a laptop can keep up with large recordings
+
+The application is intentionally focused on offline signal analysis and diagnosis. It does not compute position, pseudoranges, maps, or a full PVT solution.
+
+## Why This Tool Exists
+
+Many GNSS examples jump quickly from a binary file to a black-box "lock" result. This app is aimed at the opposite workflow: show the evidence at each step, keep PRN-specific results visually separated, and make uncertain real-world captures diagnosable instead of opaque.
+
+That means the GUI favors:
+
+- didactic DSP over overly clever implementations
+- per-satellite acquisition, tracking, and navigation evidence
+- sample-rate and search-center hypothesis testing for ambiguous recordings
+- workflows that still work on multi-gigabyte captures
+
+## Current Scope
+
+Supported well today:
+
+- little-endian `complex64` IQ recordings (`float32 I` + `float32 Q`)
+- offline preview of selected windows
+- acquisition for one PRN or PRN scan across `1..32`
+- repeated-segment consistency scoring for weak detections
+- automatic survey of common GNSS sample-rate hypotheses
+- IF / search-center sweeps when the capture is not true baseband
 - simple tracking with Early/Prompt/Late correlators
-- 50 bps bit extraction from 1 ms prompt integrations
+- 1 ms prompt integrations and 20 ms bit decisions
 - LNAV preamble detection, word sync, and parity checks
-- laptop benchmark for large-recording suitability and bottleneck detection
-- per-PRN satellite-oriented views so acquisition, tracking, and decoded bits can be inspected separately
-- configurable RAM loading with full-source preload, RAM status display, warnings, and progress dialog
+- benchmark of file I/O, FFT, acquisition, and tracking throughput
 
-This version intentionally does **not** compute position, pseudoranges, or a full PVT solution.
+Out of scope for now:
 
-The current default assumption is a `6 MSa/s` little-endian `complex64` recording. That is generally enough for GPS L1 C/A offline acquisition and tracking; if decoding is still weak, the limiting factors are more likely IF/search-center assumptions, front-end filtering, or signal strength than raw sample-rate alone.
+- live SDR streaming
+- non-`complex64` input as a first-class GUI path
+- GPS position solving or map display
+- full ephemeris interpretation and navigation solutioning
 
-For ambiguous recordings, the acquisition tab can now auto-survey common GNSS sample rates such as `2.046 MSa/s`, `4.092 MSa/s`, and `6.000 MSa/s`, then rank which hypothesis produces the most repeatable PRN evidence across the file.
+## Installation
 
-## Large recordings
+The app runs with Python and a small Qt/NumPy stack.
 
-- The GUI is designed to work on very large recordings by reading only selected windows for display.
-- Acquisition loads only the short segment it actually needs.
-- Tracking can stream 1 ms blocks directly from the file instead of loading the whole recording into RAM.
-- For multi-gigabyte files, a RAM disk can still help throughput, but the tool does not require the entire file to fit in memory.
-- The benchmark measures windowed reads, sequential streaming, FFT throughput, acquisition cost, and tracking cost.
-- The slowest measured subsystem is marked as the bottleneck and compared against 6 MSa/s.
+### PowerShell
 
-## RAM loading modes
-
-- The session tab shows a RAM status line with planned load size and available system RAM.
-- `Preload full window to RAM` can be enabled to load the complete source before DSP starts.
-- If disabled, the tool loads only the selected analysis window.
-- Large RAM loads trigger a warning and use a progress dialog with cancel support.
-
-## Quick start
-
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+### Dependencies
+
+`requirements.txt` currently includes:
+
+- `numpy`
+- `scipy`
+- `PySide6`
+- `pyqtgraph`
+- `pytest`
+
+## Running The App
+
+```powershell
 python -m app.main
 ```
 
-## Example workflow
+If `test3min.bin` or `test1.bin` is present in the working directory, the GUI pre-fills that file path on startup to make first use easier.
 
-1. Open the app.
-2. Load `test3min.bin`, `test1.bin`, or generate a demo signal.
-3. Start with the default `6 MSa/s` sample rate unless you know the capture used a different rate.
-4. Preview a selected window.
-5. Run acquisition for a PRN.
-6. Optionally run `Auto Detect Capture` to compare common sample-rate hypotheses and pick the most repeatable one.
-7. Optionally scan PRNs 1..32 to rank likely visible satellites.
-8. Start tracking for the selected PRN from the acquisition tab or tracking tab.
-9. Decode navigation bits and inspect LNAV word sync for that PRN.
-10. Run the benchmark to estimate how well the laptop handles large recordings.
+## Running Tests
 
-## Notes on input
+```powershell
+pytest app/tests
+```
 
-- Supported v1 file format: little-endian `complex64`
-- That means each sample is stored as `float32 real` + `float32 imag`
-- The file importer shows the estimated sample count and duration from the chosen sample rate
+The test suite includes unit coverage for DSP helpers plus GUI smoke tests.
 
-## Project layout
+## Input Format
 
-- `app/main.py`: application entry point
-- `app/gui/`: Qt main window, tabs, and worker wrappers
-- `app/dsp/`: I/O, acquisition, tracking, bit sync, nav decode, and demo signal generation
-- `app/models/`: dataclasses for session and processing results
-- `app/tests/`: unit and smoke tests
+The main GUI workflow currently assumes:
 
-## Where to extend next
+- sample type: little-endian `complex64`
+- layout: `float32` real followed by `float32` imaginary
+- signal family: GPS L1 C/A
 
-- `app/dsp/navdecode.py`: add full LNAV field parsing and ephemeris decoding
-- `app/dsp/tracking.py`: add stronger lock metrics, CN0 estimation, and more refined DLL/FLL/PLL tuning
-- `app/models/session.py`: extend session state for pseudorange observables
-- future `app/dsp/pvt.py`: add satellite position, clock correction, pseudorange solution, and PVT
+Default working assumptions in the UI:
+
+- sample rate: `6.000 MSa/s`
+- center frequency: `1575.42 MHz`
+- signal mode: baseband unless you specify a nonzero IF / search center
+
+Those defaults are practical starting points, not universal truth. If a real capture behaves strangely, the app provides tools to test other sample-rate and IF hypotheses instead of forcing one interpretation.
+
+## First-Run Workflow
+
+1. Launch the app with `python -m app.main`.
+2. Open a `.bin` or `.dat` IQ file, or generate the built-in demo signal.
+3. In `File / Session`, set sample rate, signal mode, start sample, and window size.
+4. Click `Preview` to inspect a bounded window before committing to heavier DSP steps.
+5. Go to `Acquisition` and run either a single-PRN acquisition or a PRN scan.
+6. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
+7. Track the highlighted PRN once acquisition looks believable.
+8. Decode bits and inspect LNAV framing in `Bits / Navigation`.
+9. Run `Benchmark` if you want a quick laptop suitability estimate for larger files.
+
+## What Each Tab Is For
+
+### File / Session
+
+This is the control center for loading data and choosing how much of the source is read:
+
+- file path and metadata preview
+- sample-rate, baseband/IF, and window controls
+- RAM preload policy
+- preview magnitude plot
+- session log and worker progress
+
+### Raw Signal
+
+Use this tab to sanity-check the selected window in the time domain before acquisition.
+
+### Spectrum / Waterfall
+
+Use this view to look for occupied bandwidth, DC behavior, and whether the selected acquisition hypothesis matches visible spectral structure.
+
+### IQ Plane
+
+This helps spot clipping, bias, unexpected constellations, and the change from raw IQ to tracked channel views.
+
+### Acquisition
+
+This tab is the main diagnosis surface for initial satellite detection:
+
+- code phase vs Doppler heatmap
+- best-candidate tables
+- PRN scan table for `1..32`
+- repeated-segment evidence text
+- sample-rate hypothesis ranking
+- IF / center-frequency sweep ranking
+
+The app deliberately treats repeated evidence across segments as more meaningful than a single high peak.
+
+### Tracking
+
+This view shows how one selected PRN behaves after acquisition:
+
+- prompt I/Q
+- Early/Prompt/Late magnitudes
+- code and carrier error traces
+- Doppler and code-frequency estimates
+- lock metric
+
+### Bits / Navigation
+
+This view stays PRN-specific and shows:
+
+- 1 ms prompt values
+- 20 ms bit accumulations
+- hard bit decisions
+- LNAV preamble detections
+- word labels, parity results, and bit/hex summaries
+
+### Benchmark
+
+The benchmark estimates how well the current machine handles the workload by measuring:
+
+- file/window reading
+- sequential streaming
+- FFT throughput
+- acquisition cost
+- tracking cost
+
+The slowest measured component is highlighted as the bottleneck and compared against a `6 MSa/s` target workload.
+
+## Large Recording Behavior
+
+The app is designed to stay usable on large recordings.
+
+- Preview and plotting operate on bounded windows.
+- Acquisition loads only the short segment it needs unless the chosen mode requires more.
+- Tracking can work from streamed or bounded source data rather than requiring the entire file to be resident.
+- Full-file RAM preload is optional and clearly exposed in the GUI.
+- Large RAM loads show warnings and a progress dialog with cancel support.
+
+In practice, this means you can use the tool in two different styles:
+
+- preload mode: load the whole source once, then work quickly from RAM
+- bounded-window mode: inspect and process only the selected window to reduce memory pressure
+
+## Diagnosing Weak Or Ambiguous Captures
+
+This repository puts unusual emphasis on diagnosis instead of pretending every file is clean.
+
+When acquisition is weak:
+
+- run `Scan PRNs 1-32` to see whether any satellite stands out consistently
+- use `Auto Detect Capture` to compare common sample-rate hypotheses
+- use `Sweep Search Center` if the recording may have a residual IF or incorrect search center
+- look at repeated-segment consistency, not only the best raw metric
+- use the spectrum and IQ views to check whether the recording itself looks plausible
+
+A longer file alone does not guarantee success. Wrong sample-rate assumptions, wrong IF/baseband assumptions, front-end filtering, low SNR, or repeated artifacts can all dominate the outcome.
+
+## Demo And Local Sample Files
+
+The app can generate a synthetic demo signal for a self-contained workflow test.
+
+If local files such as `test1.bin` or `test3min.bin` are present, they can be used as convenient offline examples. Large real captures should remain local analysis assets and should not be committed to Git by default.
+
+## Project Layout
+
+- `app/main.py`: Qt application entry point
+- `app/gui/`: main window, worker plumbing, and tab widgets
+- `app/gui/tabs/`: session, visualization, acquisition, tracking, navigation, and benchmark tabs
+- `app/dsp/`: IQ I/O, PRN generation, acquisition, tracking, bit sync, navigation decode, benchmark logic, and demo generation
+- `app/models/`: shared dataclasses for GUI and DSP state
+- `app/tests/`: DSP tests and GUI smoke tests
+
+## Development Notes
+
+When extending the project, please keep these repository goals intact:
+
+- keep the app runnable with `python -m app.main`
+- keep GUI code separate from DSP logic
+- preserve readable, didactic implementations
+- keep large-file workflows explicit and understandable
+- keep PRN-specific evidence visually separated when possible
+- add or update tests for DSP behavior when practical
+
+If a change materially alters workflow or project scope, update `README.md`, `requirements.txt`, and `AGENTS.md` together.
