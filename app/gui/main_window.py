@@ -387,7 +387,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Refresh plots that only depend on the selected sample window."""
 
         self.raw_tab.update_signal(samples)
-        self.spectrum_tab.update_signal(samples, self.session.sample_rate)
+        acquisition = self.acquisition_results_by_prn.get(self.selected_prn) if self.selected_prn is not None else self.acquisition_result
+        self.spectrum_tab.update_signal(samples, self.session.sample_rate, session=self.session, acquisition=acquisition)
         self.iq_tab.set_sources({"Raw IQ": samples})
 
     def refresh_satellite_views(self) -> None:
@@ -456,8 +457,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.acquisition_results_by_prn[result.prn] = result
         self.selected_prn = result.prn
         self.refresh_satellite_views()
+        if self.current_display_samples.size:
+            self.spectrum_tab.update_signal(
+                self.current_display_samples,
+                self.session.sample_rate,
+                session=self.session,
+                acquisition=result,
+            )
         self.session_tab.set_progress(100)
-        self.append_log("Acquisition finished.")
+        if result.best_candidate.metric < 6.0:
+            self.append_log(
+                f"Acquisition finished, but the best metric is only {result.best_candidate.metric:.2f}. "
+                "That is weak, so the sample rate / IF assumptions may still be wrong or the signal may be faint."
+            )
+        else:
+            self.append_log("Acquisition finished.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
     def _on_acquisition_scan_finished(self, results: list[AcquisitionResult]) -> None:
@@ -466,8 +480,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.acquisition_result = results[0]
             self.selected_prn = results[0].prn
             self.refresh_satellite_views()
+            if self.current_display_samples.size:
+                self.spectrum_tab.update_signal(
+                    self.current_display_samples,
+                    self.session.sample_rate,
+                    session=self.session,
+                    acquisition=results[0],
+                )
         self.session_tab.set_progress(100)
-        self.append_log(f"PRN scan finished. Ranked {len(results)} satellite hypotheses.")
+        if results and results[0].best_candidate.metric < 6.0:
+            self.append_log(
+                f"PRN scan finished. Best hypothesis is PRN {results[0].prn} with metric {results[0].best_candidate.metric:.2f}, "
+                "which is still weak. The file duration is probably not the main issue; check sample rate, IF/baseband assumption, and signal quality."
+            )
+        else:
+            self.append_log(f"PRN scan finished. Ranked {len(results)} satellite hypotheses.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
     def start_tracking(self) -> None:
