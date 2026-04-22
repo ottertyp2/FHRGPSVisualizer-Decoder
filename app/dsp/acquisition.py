@@ -12,6 +12,8 @@ from app.models import (
     AcquisitionResult,
     SearchCenterSweepEntry,
     SearchCenterSweepResult,
+    SampleRateSurveyEntry,
+    SampleRateSurveyResult,
     SessionConfig,
 )
 
@@ -68,6 +70,32 @@ def _select_segment_starts_ms(total_ms: int, block_count: int, segment_count: in
     return np.linspace(0, max_start, num=usable_segment_count, dtype=int)
 
 
+def _cluster_segment_candidates(
+    candidates: list[AcquisitionCandidate],
+    doppler_tolerance_hz: float,
+    code_phase_tolerance_samples: int,
+) -> tuple[list[AcquisitionCandidate], float]:
+    """Find the dominant cluster of repeated PRN hits across searched segments."""
+
+    if not candidates:
+        return [], 0.0
+
+    best_cluster: list[AcquisitionCandidate] = []
+    best_score = -np.inf
+    for seed in candidates:
+        cluster = [
+            candidate
+            for candidate in candidates
+            if abs(candidate.doppler_hz - seed.doppler_hz) <= doppler_tolerance_hz
+            and abs(candidate.code_phase_samples - seed.code_phase_samples) <= code_phase_tolerance_samples
+        ]
+        score = float(len(cluster)) * float(np.mean([candidate.metric for candidate in cluster]))
+        if score > best_score:
+            best_cluster = cluster
+            best_score = score
+    return best_cluster, float(max(best_score, 0.0))
+
+
 def acquire_signal(
     samples: np.ndarray,
     config: AcquisitionConfig,
@@ -97,16 +125,20 @@ def acquire_signal(
     best_row = 0
     best_col = 0
     best_usable = 0
+    segment_candidates: list[AcquisitionCandidate] = []
 
     for segment_index, segment_start_ms in enumerate(segment_starts_ms):
         segment_start = int(segment_start_ms) * samples_per_ms
         if config.acquisition_segment_count > 1:
             segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
-            segment_samples = samples[segment_start:segment_stop]
+            segment_samples = np.asarray(samples[segment_start:segment_stop], dtype=np.complex64)
             segment_spread = False
         else:
-            segment_samples = samples[segment_start:]
+            segment_samples = np.asarray(samples[segment_start:], dtype=np.complex64)
             segment_spread = bool(config.spread_acquisition_blocks)
+
+        if segment_samples.size:
+            segment_samples = segment_samples - np.mean(segment_samples)
 
         selected_blocks = _select_ms_blocks(
             segment_samples,
@@ -134,6 +166,16 @@ def acquire_signal(
         row, col = np.unravel_index(flat_index, heatmap.shape)
         noise_floor = float(np.mean(heatmap) + 1e-12)
         metric = float(heatmap[row, col] / noise_floor)
+        code_phase = int((samples_per_ms - col) % samples_per_ms)
+        segment_best = AcquisitionCandidate(
+            prn=config.prn,
+            doppler_hz=float(doppler_bins[row]),
+            carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
+            code_phase_samples=code_phase,
+            metric=float(metric),
+            segment_start_sample=int(segment_start_ms * samples_per_ms),
+        )
+        segment_candidates.append(segment_best)
         if metric > best_metric:
             best_metric = metric
             best_heatmap = heatmap
@@ -147,15 +189,58 @@ def acquire_signal(
 
     heatmap = best_heatmap
     noise_floor = float(np.mean(heatmap) + 1e-12)
-    best_code_phase = int((samples_per_ms - best_col) % samples_per_ms)
     best = AcquisitionCandidate(
         prn=config.prn,
         doppler_hz=float(doppler_bins[best_row]),
         carrier_frequency_hz=float(config.search_center_hz + doppler_bins[best_row]),
-        code_phase_samples=best_code_phase,
-        segment_start_sample=int(best_segment_start_ms * samples_per_ms),
+        code_phase_samples=int((samples_per_ms - best_col) % samples_per_ms),
         metric=float(best_metric),
+        segment_start_sample=int(best_segment_start_ms * samples_per_ms),
     )
+
+    dominant_cluster, consistency_score = _cluster_segment_candidates(
+        segment_candidates,
+        doppler_tolerance_hz=max(float(config.doppler_step) * 2.0, 750.0),
+        code_phase_tolerance_samples=max(25, samples_per_ms // 32),
+    )
+    consistent_segments = len(dominant_cluster)
+    if dominant_cluster:
+        dominant_cluster = sorted(dominant_cluster, key=lambda candidate: candidate.metric, reverse=True)
+        best = dominant_cluster[0]
+        dominant_segment_start = best.segment_start_sample // samples_per_ms
+        best_segment_start_ms = int(dominant_segment_start)
+        for segment_index, segment_start_ms in enumerate(segment_starts_ms):
+            if int(segment_start_ms) == dominant_segment_start:
+                # The heatmap should reflect the segment used for the chosen best candidate.
+                segment_start = int(segment_start_ms) * samples_per_ms
+                if config.acquisition_segment_count > 1:
+                    segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
+                    segment_samples = np.asarray(samples[segment_start:segment_stop], dtype=np.complex64)
+                    segment_spread = False
+                else:
+                    segment_samples = np.asarray(samples[segment_start:], dtype=np.complex64)
+                    segment_spread = bool(config.spread_acquisition_blocks)
+                if segment_samples.size:
+                    segment_samples = segment_samples - np.mean(segment_samples)
+                selected_blocks = _select_ms_blocks(
+                    segment_samples,
+                    sample_rate,
+                    block_count=max(1, int(config.integration_ms)),
+                    spread_blocks=segment_spread,
+                )
+                if selected_blocks.size:
+                    cluster_heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
+                    for row, doppler in enumerate(doppler_bins):
+                        search_frequency_hz = config.search_center_hz + float(doppler)
+                        metrics = np.zeros(samples_per_ms, dtype=np.float64)
+                        for block_index in range(int(selected_blocks.shape[0])):
+                            block = selected_blocks[block_index]
+                            wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
+                            correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
+                            metrics += np.abs(correlation) ** 2
+                        cluster_heatmap[row, :] = metrics.astype(np.float32)
+                    heatmap = cluster_heatmap
+                break
 
     flat = heatmap.ravel()
     top_indices = np.argsort(flat)[-8:][::-1]
@@ -185,7 +270,8 @@ def acquire_signal(
             f"(relative Doppler {best.doppler_hz:+.1f} Hz), code phase {best.code_phase_samples} samples, "
             f"using {best_usable} x 1 ms blocks starting at {best.segment_start_sample / sample_rate:.3f} s"
             f"{' spread across the source' if config.acquisition_segment_count == 1 and config.spread_acquisition_blocks else ''}"
-            f"{' from a segmented deep search' if config.acquisition_segment_count > 1 else ''}."
+            f"{' from a segmented deep search' if config.acquisition_segment_count > 1 else ''}"
+            f"{', consistent in ' + str(consistent_segments) + ' segment(s)' if consistent_segments > 1 else ''}."
         )
 
     return AcquisitionResult(
@@ -197,6 +283,9 @@ def acquire_signal(
         heatmap=heatmap,
         best_candidate=best,
         candidates=candidates,
+        segment_candidates=segment_candidates,
+        consistent_segments=consistent_segments,
+        consistency_score=consistency_score,
     )
 
 
@@ -256,7 +345,14 @@ def scan_prns_from_session(
         result = acquire_signal(samples, config, progress_callback=nested_progress, log_callback=log_callback)
         results.append(result)
 
-    results.sort(key=lambda item: item.best_candidate.metric, reverse=True)
+    results.sort(
+        key=lambda item: (
+            item.consistent_segments,
+            item.consistency_score,
+            item.best_candidate.metric,
+        ),
+        reverse=True,
+    )
     if progress_callback:
         progress_callback(100)
     return results
@@ -301,7 +397,79 @@ def sweep_search_centers_from_session(
                 f"metric {best.best_candidate.metric:.2f}, search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
             )
 
-    entries.sort(key=lambda item: item.best_result.best_candidate.metric, reverse=True)
+    entries.sort(
+        key=lambda item: (
+            item.best_result.consistent_segments,
+            item.best_result.consistency_score,
+            item.best_result.best_candidate.metric,
+        ),
+        reverse=True,
+    )
     if progress_callback:
         progress_callback(100)
     return SearchCenterSweepResult(entries=entries)
+
+
+def survey_sample_rates(
+    samples: np.ndarray,
+    session: SessionConfig,
+    sample_rates_hz: list[float],
+    prns: list[int] | None = None,
+    progress_callback=None,
+    log_callback=None,
+) -> SampleRateSurveyResult:
+    """Rank several sample-rate hypotheses for one recording."""
+
+    rates = sample_rates_hz or [session.sample_rate]
+    entries: list[SampleRateSurveyEntry] = []
+    total = max(len(rates), 1)
+    prn_list = prns or list(range(1, 33))
+
+    for rate_index, sample_rate_hz in enumerate(rates):
+        local_session = replace(session)
+        local_session.sample_rate = float(sample_rate_hz)
+        local_session.doppler_min = min(int(session.doppler_min), -20_000)
+        local_session.doppler_max = max(int(session.doppler_max), 20_000)
+        local_session.doppler_step = max(int(session.doppler_step), 500)
+        local_session.integration_ms = min(max(int(session.integration_ms), 20), 80)
+        local_session.acquisition_segment_count = max(int(session.acquisition_segment_count), 6)
+        local_session.spread_acquisition_blocks = False
+
+        def nested_progress(local_progress: int, *, base=rate_index) -> None:
+            if progress_callback:
+                combined = int(((base + local_progress / 100.0) / total) * 100)
+                progress_callback(combined)
+
+        results = scan_prns_from_session(
+            samples,
+            local_session,
+            prns=prn_list,
+            progress_callback=nested_progress,
+            log_callback=None,
+        )
+        best = results[0]
+        entries.append(
+            SampleRateSurveyEntry(
+                sample_rate_hz=float(sample_rate_hz),
+                best_result=best,
+                all_results=results,
+            )
+        )
+        if log_callback:
+            log_callback(
+                f"Sample-rate survey {sample_rate_hz / 1e6:.3f} MSa/s: best PRN {best.prn}, "
+                f"metric {best.best_candidate.metric:.2f}, consistent segments {best.consistent_segments}, "
+                f"search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+            )
+
+    entries.sort(
+        key=lambda entry: (
+            entry.best_result.consistent_segments,
+            entry.best_result.consistency_score,
+            entry.best_result.best_candidate.metric,
+        ),
+        reverse=True,
+    )
+    if progress_callback:
+        progress_callback(100)
+    return SampleRateSurveyResult(entries=entries)

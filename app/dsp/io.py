@@ -10,6 +10,25 @@ import numpy as np
 from app.models import FileMetadata
 
 
+COMMON_GNSS_SAMPLE_RATES = (
+    2_000_000.0,
+    2_046_000.0,
+    2_048_000.0,
+    4_092_000.0,
+    4_096_000.0,
+    6_000_000.0,
+)
+
+
+def common_sample_rate_hints(total_samples: int) -> dict[str, float]:
+    """Return durations for common GNSS sample-rate hypotheses."""
+
+    hints: dict[str, float] = {}
+    for sample_rate in COMMON_GNSS_SAMPLE_RATES:
+        hints[f"{sample_rate / 1e6:.3f} MSa/s"] = float(total_samples / sample_rate)
+    return hints
+
+
 def inspect_complex64_file(
     file_path: str,
     sample_rate: float,
@@ -39,6 +58,7 @@ def inspect_complex64_file(
         sample_rate_hz=float(sample_rate),
         total_samples=total_samples,
         estimated_duration_s=(total_samples / sample_rate) if sample_rate > 0 else 0.0,
+        common_rate_duration_hints=common_sample_rate_hints(total_samples),
         preview_stats=preview_stats,
         preview_samples=preview.astype(np.complex64, copy=False),
     )

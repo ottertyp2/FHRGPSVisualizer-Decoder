@@ -12,6 +12,8 @@ from .session import (
     NavigationWord,
     SearchCenterSweepEntry,
     SearchCenterSweepResult,
+    SampleRateSurveyEntry,
+    SampleRateSurveyResult,
     SessionConfig,
     TrackingState,
 )
@@ -28,6 +30,8 @@ __all__ = [
     "NavigationWord",
     "SearchCenterSweepEntry",
     "SearchCenterSweepResult",
+    "SampleRateSurveyEntry",
+    "SampleRateSurveyResult",
     "SessionConfig",
     "TrackingState",
 ]

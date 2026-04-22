@@ -10,6 +10,7 @@ Agents working here should preserve the project's core priorities:
 - visual separation of PRN- and satellite-specific evidence through the workflow
 - clean separation between GUI, DSP, models, and tests
 - support for large recordings through windowed reads and streaming
+- keep ambiguous real-world captures diagnosable through sample-rate surveys and segment-consistency evidence
 - no PVT or position solution unless explicitly added later
 
 ## Project structure
@@ -27,6 +28,7 @@ Agents working here should preserve the project's core priorities:
 - Keep GUI code and DSP code separate; do not bury signal-processing logic inside widgets.
 - When handling large recordings, support both RAM-preload and bounded-window workflows; keep the user-visible mode clear in the GUI.
 - Treat `complex64` little-endian IQ as the current baseline input format unless the repo is explicitly extended.
+- Preserve the real-capture diagnosis path: sample-rate hypotheses, repeated-segment evidence, and per-PRN explanations should stay understandable in the GUI.
 - Do not add position solving, maps, or full PVT implicitly.
 - Preserve the benchmark path so laptop suitability remains visible inside the GUI.
 - Keep PRN-specific acquisition, tracking, and navigation evidence understandable and visually separated when possible.

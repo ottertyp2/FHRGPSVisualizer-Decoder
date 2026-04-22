@@ -10,11 +10,13 @@ from PySide6 import QtCore, QtWidgets
 
 from app.dsp.acquisition import acquisition_from_session
 from app.dsp.acquisition import scan_prns_from_session
+from app.dsp.acquisition import survey_sample_rates
 from app.dsp.acquisition import sweep_search_centers_from_session
 from app.dsp.benchmark import run_benchmark
 from app.dsp.bitsync import extract_navigation_bits
 from app.dsp.demo import generate_demo_signal
 from app.dsp.io import (
+    common_sample_rate_hints,
     inspect_complex64_file,
     load_complex64_file_with_progress,
     load_complex64_samples_with_progress,
@@ -38,6 +40,7 @@ from app.models import (
     FileMetadata,
     NavigationDecodeResult,
     SearchCenterSweepResult,
+    SampleRateSurveyResult,
     SessionConfig,
     TrackingState,
 )
@@ -67,6 +70,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bit_results_by_prn: dict[int, BitDecisionResult] = {}
         self.nav_results_by_prn: dict[int, NavigationDecodeResult] = {}
         self.search_center_sweep_result: SearchCenterSweepResult | None = None
+        self.sample_rate_survey_result: SampleRateSurveyResult | None = None
         self.selected_prn: int | None = None
 
         self.tabs = QtWidgets.QTabWidget()
@@ -104,9 +108,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.acquisition_tab.run_requested.connect(self.start_acquisition)
         self.acquisition_tab.scan_requested.connect(self.scan_all_prns)
         self.acquisition_tab.sweep_requested.connect(self.start_search_center_sweep)
+        self.acquisition_tab.auto_rate_survey_requested.connect(self.start_sample_rate_survey)
         self.acquisition_tab.track_selected_requested.connect(self.start_tracking)
         self.acquisition_tab.selection_changed.connect(self.set_selected_prn)
         self.acquisition_tab.sweep_selection_changed.connect(self.apply_search_center_selection)
+        self.acquisition_tab.sample_rate_selection_changed.connect(self.apply_sample_rate_selection)
         self.tracking_tab.track_requested.connect(self.start_tracking)
         self.tracking_tab.decode_requested.connect(self.decode_navigation)
         self.tracking_tab.selection_changed.connect(self.set_selected_prn)
@@ -246,6 +252,18 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Applied search-center hypothesis: center {center_hz:.1f} Hz, PRN {prn}."
         )
 
+    def apply_sample_rate_selection(self, sample_rate_hz: float, prn: int) -> None:
+        """Apply one sample-rate hypothesis from the survey table."""
+
+        self.session_tab.sample_rate_spin.setValue(float(sample_rate_hz))
+        self.sync_session_from_ui()
+        if self.session.file_path and self.session.file_path != "<demo>":
+            self.inspect_file(self.session.file_path)
+        self.set_selected_prn(prn)
+        self.append_log(
+            f"Applied sample-rate hypothesis: {sample_rate_hz / 1e6:.3f} MSa/s, PRN {prn}."
+        )
+
     def available_prns(self, with_tracking: bool = False) -> list[int]:
         """Return the currently known PRNs."""
 
@@ -290,6 +308,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.append_log(
             f"Loaded metadata for {metadata.file_name}: {metadata.total_samples:,} complex64 samples."
         )
+        if metadata.common_rate_duration_hints:
+            preferred_hints = []
+            for label in ("2.046 MSa/s", "4.092 MSa/s", "6.000 MSa/s"):
+                if label in metadata.common_rate_duration_hints:
+                    preferred_hints.append(f"{label} -> {metadata.common_rate_duration_hints[label]:.2f} s")
+            if preferred_hints:
+                self.append_log("Common GNSS duration hints: " + ", ".join(preferred_hints) + ".")
 
     def _current_signature(self) -> tuple[str | None, bool, int, int]:
         """Return a signature for the currently loaded source or window policy."""
@@ -430,7 +455,11 @@ class MainWindow(QtWidgets.QMainWindow):
         nav_result = self.nav_results_by_prn.get(self.selected_prn)
 
         if acquisition is not None:
-            all_results = sorted(self.acquisition_results_by_prn.values(), key=lambda item: item.best_candidate.metric, reverse=True)
+            all_results = sorted(
+                self.acquisition_results_by_prn.values(),
+                key=lambda item: (item.consistent_segments, item.consistency_score, item.best_candidate.metric),
+                reverse=True,
+            )
             self.acquisition_tab.update_result(acquisition, all_results)
         self.tracking_tab.set_available_prns(self.available_prns(), self.selected_prn)
         self.navigation_tab.set_available_prns(self.available_prns(with_tracking=True), self.selected_prn)
@@ -487,6 +516,30 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._start_worker(worker, self._on_search_center_sweep_finished)
 
+    def start_sample_rate_survey(self) -> None:
+        """Try several common GNSS sample-rate hypotheses automatically."""
+
+        self.sync_session_from_ui()
+        full_samples = self.ensure_samples()
+        if full_samples.size == 0:
+            return
+        display_samples = full_samples[: min(full_samples.size, 500_000)]
+        self.current_display_samples = display_samples
+        self.update_passive_views(display_samples)
+        samples = self.current_samples if self.current_samples.size else self.ensure_samples()
+        common_rates = [2_000_000.0, 2_046_000.0, 2_048_000.0, 4_092_000.0, 4_096_000.0, 6_000_000.0]
+        if self.session.sample_rate not in common_rates:
+            common_rates.append(float(self.session.sample_rate))
+        common_rates = sorted(set(common_rates))
+        worker = Worker(
+            survey_sample_rates,
+            samples,
+            self.session,
+            common_rates,
+            list(range(1, 33)),
+        )
+        self._start_worker(worker, self._on_sample_rate_survey_finished)
+
     def scan_all_prns(self) -> None:
         """Run acquisition over PRNs 1..32 for a more intuitive satellite overview."""
 
@@ -515,7 +568,12 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         self.session_tab.set_progress(100)
         near_edge = abs(result.best_candidate.doppler_hz) >= (max(abs(self.session.doppler_min), abs(self.session.doppler_max)) - self.session.doppler_step)
-        if result.best_candidate.metric < 6.0:
+        if result.consistent_segments >= 3:
+            self.append_log(
+                f"Acquisition finished. PRN {result.prn} repeats across {result.consistent_segments} segments, "
+                f"so it looks more plausible than a one-off peak even though the raw metric is {result.best_candidate.metric:.2f}."
+            )
+        elif result.best_candidate.metric < 6.0:
             self.append_log(
                 f"Acquisition finished, but the best metric is only {result.best_candidate.metric:.2f} at "
                 f"{result.best_candidate.carrier_frequency_hz:.1f} Hz "
@@ -545,7 +603,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     acquisition=results[0],
                 )
         self.session_tab.set_progress(100)
-        if results and results[0].best_candidate.metric < 6.0:
+        if results and results[0].consistent_segments >= 3:
+            self.append_log(
+                f"PRN scan finished. Best hypothesis is PRN {results[0].prn} with repeated hits in "
+                f"{results[0].consistent_segments} segments at {results[0].best_candidate.carrier_frequency_hz:.1f} Hz. "
+                "That kind of repetition is much more believable than a single isolated peak."
+            )
+        elif results and results[0].best_candidate.metric < 6.0:
             self.append_log(
                 f"PRN scan finished. Best hypothesis is PRN {results[0].prn} at {results[0].best_candidate.carrier_frequency_hz:.1f} Hz "
                 f"(relative Doppler {results[0].best_candidate.doppler_hz:+.1f} Hz) with metric {results[0].best_candidate.metric:.2f}, "
@@ -575,6 +639,36 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         else:
             self.append_log("Search-center sweep finished, but no candidates were produced.")
+        self.session_tab.set_progress(100)
+        self.tabs.setCurrentWidget(self.acquisition_tab)
+
+    def _on_sample_rate_survey_finished(self, result: SampleRateSurveyResult) -> None:
+        self.sample_rate_survey_result = result
+        self.acquisition_tab.update_sample_rate_survey(result.entries)
+        if result.entries:
+            best_entry = result.entries[0]
+            self.session_tab.sample_rate_spin.setValue(best_entry.sample_rate_hz)
+            self.sync_session_from_ui()
+            if self.session.file_path and self.session.file_path != "<demo>":
+                self.inspect_file(self.session.file_path)
+            self.acquisition_results_by_prn = {item.prn: item for item in best_entry.all_results}
+            self.acquisition_result = best_entry.best_result
+            self.selected_prn = best_entry.best_result.prn
+            self.refresh_satellite_views()
+            if self.current_display_samples.size:
+                self.spectrum_tab.update_signal(
+                    self.current_display_samples,
+                    self.session.sample_rate,
+                    session=self.session,
+                    acquisition=best_entry.best_result,
+                )
+            self.append_log(
+                f"Sample-rate survey finished. Best hypothesis is {best_entry.sample_rate_hz / 1e6:.3f} MSa/s "
+                f"with PRN {best_entry.best_result.prn}, metric {best_entry.best_result.best_candidate.metric:.2f}, "
+                f"consistent segments {best_entry.best_result.consistent_segments}."
+            )
+        else:
+            self.append_log("Sample-rate survey finished, but no candidates were produced.")
         self.session_tab.set_progress(100)
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
@@ -653,6 +747,7 @@ class MainWindow(QtWidgets.QMainWindow):
             sample_rate_hz=float(demo.sample_rate),
             total_samples=demo.samples.size,
             estimated_duration_s=demo.samples.size / demo.sample_rate,
+            common_rate_duration_hints=common_sample_rate_hints(demo.samples.size),
             preview_stats={
                 "rms": float(np.sqrt(np.mean(np.abs(demo.samples) ** 2))),
                 "mean_mag": float(np.mean(np.abs(demo.samples))),

@@ -181,12 +181,17 @@ class SessionTab(QtWidgets.QWidget):
         self.file_edit.setText(file_path)
 
     def set_metadata(self, metadata: FileMetadata) -> None:
+        hints = ", ".join(
+            f"{label}: {duration_s:.2f} s"
+            for label, duration_s in metadata.common_rate_duration_hints.items()
+        )
         self.metadata_label.setText(
             f"File: {metadata.file_name}\n"
             f"Type: {metadata.data_type} ({metadata.endianness}-endian)\n"
             f"Samples: {metadata.total_samples:,}\n"
             f"Estimated duration: {metadata.estimated_duration_s:.3f} s\n"
-            f"Preview RMS: {metadata.preview_stats.get('rms', 0.0):.6f}"
+            f"Preview RMS: {metadata.preview_stats.get('rms', 0.0):.6f}\n"
+            f"Common GNSS rate hints: {hints}"
         )
         if metadata.total_samples > 0:
             self.start_sample_spin.setMaximum(metadata.total_samples - 1)

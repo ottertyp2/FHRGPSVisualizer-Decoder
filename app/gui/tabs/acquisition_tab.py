@@ -15,9 +15,11 @@ class AcquisitionTab(QtWidgets.QWidget):
     run_requested = QtCore.Signal()
     scan_requested = QtCore.Signal()
     sweep_requested = QtCore.Signal()
+    auto_rate_survey_requested = QtCore.Signal()
     track_selected_requested = QtCore.Signal()
     selection_changed = QtCore.Signal(int)
     sweep_selection_changed = QtCore.Signal(float, int)
+    sample_rate_selection_changed = QtCore.Signal(float, int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -73,10 +75,12 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.center_step_spin.setRange(100, 20_000)
         self.center_step_spin.setValue(500)
         self.center_sweep_button = QtWidgets.QPushButton("Sweep Search Center")
+        self.auto_detect_button = QtWidgets.QPushButton("Auto Detect Capture")
         sweep_layout.addRow("Center min [Hz]", self.center_min_spin)
         sweep_layout.addRow("Center max [Hz]", self.center_max_spin)
         sweep_layout.addRow("Center step [Hz]", self.center_step_spin)
         sweep_layout.addRow(self.center_sweep_button)
+        sweep_layout.addRow(self.auto_detect_button)
         layout.addWidget(sweep_group)
 
         action_row = QtWidgets.QHBoxLayout()
@@ -111,6 +115,12 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         right_panel = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_layout.addWidget(QtWidgets.QLabel("Best sample-rate hypotheses"))
+        self.rate_table = QtWidgets.QTableWidget(0, 6)
+        self.rate_table.setHorizontalHeaderLabels(["Sample rate [Sa/s]", "Best PRN", "Consistent segs", "Score", "Metric", "Search freq [Hz]"])
+        self.rate_table.horizontalHeader().setStretchLastSection(True)
+        right_layout.addWidget(self.rate_table, stretch=1)
+
         right_layout.addWidget(QtWidgets.QLabel("Best IF / search-center hypotheses"))
         self.center_table = QtWidgets.QTableWidget(0, 5)
         self.center_table.setHorizontalHeaderLabels(["Center [Hz]", "Best PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]"])
@@ -118,8 +128,8 @@ class AcquisitionTab(QtWidgets.QWidget):
         right_layout.addWidget(self.center_table, stretch=1)
 
         right_layout.addWidget(QtWidgets.QLabel("Detected / inspected satellites"))
-        self.satellite_table = QtWidgets.QTableWidget(0, 6)
-        self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Interpretation"])
+        self.satellite_table = QtWidgets.QTableWidget(0, 7)
+        self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Consistent segs", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Interpretation"])
         self.satellite_table.horizontalHeader().setStretchLastSection(True)
         right_layout.addWidget(self.satellite_table, stretch=1)
 
@@ -136,9 +146,11 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.run_button.clicked.connect(self.run_requested.emit)
         self.scan_button.clicked.connect(self.scan_requested.emit)
         self.center_sweep_button.clicked.connect(self.sweep_requested.emit)
+        self.auto_detect_button.clicked.connect(self.auto_rate_survey_requested.emit)
         self.track_button.clicked.connect(self.track_selected_requested.emit)
         self.satellite_table.itemSelectionChanged.connect(self._emit_selection_changed)
         self.center_table.itemSelectionChanged.connect(self._emit_sweep_selection_changed)
+        self.rate_table.itemSelectionChanged.connect(self._emit_sample_rate_selection_changed)
 
     def _emit_selection_changed(self) -> None:
         items = self.satellite_table.selectedItems()
@@ -159,8 +171,9 @@ class AcquisitionTab(QtWidgets.QWidget):
             f"relative Doppler {result.best_candidate.doppler_hz:+.1f} Hz, "
             f"code phase {result.best_candidate.code_phase_samples} samples, "
             f"segment start {result.best_candidate.segment_start_sample / max(result.sample_rate_hz, 1.0):.3f} s, "
-            f"metric {result.best_candidate.metric:.2f}. "
-            "A strong, isolated peak means the local PRN aligns well with the recording."
+            f"metric {result.best_candidate.metric:.2f}, "
+            f"consistent segments {result.consistent_segments}. "
+            "A strong, repeated peak across segments is more trustworthy than one isolated hit."
         )
         self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
         rect = pg.QtCore.QRectF(
@@ -182,30 +195,43 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.satellite_table.setRowCount(len(results))
         for row, sat_result in enumerate(results):
             candidate = sat_result.best_candidate
-            interpretation = "likely visible" if candidate.metric >= 6.0 else "weak / uncertain"
+            interpretation = "repeated / plausible" if sat_result.consistent_segments >= 3 else "weak / uncertain"
             self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
             self.satellite_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
-            self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.carrier_frequency_hz:.1f}"))
-            self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:+.1f}"))
-            self.satellite_table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
-            self.satellite_table.setItem(row, 5, QtWidgets.QTableWidgetItem(interpretation))
+            self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(sat_result.consistent_segments)))
+            self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.carrier_frequency_hz:.1f}"))
+            self.satellite_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:+.1f}"))
+            self.satellite_table.setItem(row, 5, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
+            self.satellite_table.setItem(row, 6, QtWidgets.QTableWidgetItem(interpretation))
 
         self.evidence_text.setPlainText(
             "\n".join(
                 [
                     f"Selected PRN: {result.prn}",
+                    f"Sample-rate hypothesis: {result.sample_rate_hz / 1e6:.3f} MSa/s",
                     f"Search center / IF: {result.search_center_hz:.1f} Hz",
                     f"Best searched frequency: {result.best_candidate.carrier_frequency_hz:.1f} Hz",
                     f"Relative Doppler bin: {result.best_candidate.doppler_hz:+.1f} Hz",
                     f"Best code phase: {result.best_candidate.code_phase_samples} samples",
                     f"Peak metric: {result.best_candidate.metric:.2f}",
+                    f"Consistent segment count: {result.consistent_segments}",
+                    f"Consistency score: {result.consistency_score:.2f}",
                     "",
                     "Interpretation:",
                     "- The brighter the heatmap peak, the better the local PRN matches the signal.",
                     "- Search frequency is the actual tone removed in the sample domain.",
                     "- Relative Doppler is the offset around the chosen IF / search center.",
                     "- Code phase tells you where the PRN alignment happens within the 1 ms code.",
-                    "- The top candidates below show whether one peak dominates or the result is ambiguous.",
+                    "- Repeated hits across different file segments are much more convincing than one isolated maximum.",
+                    "",
+                    "Segment evidence:",
+                ]
+                + [
+                    f"- t={candidate.segment_start_sample / max(result.sample_rate_hz, 1.0):.3f} s, "
+                    f"freq={candidate.carrier_frequency_hz:.1f} Hz, "
+                    f"doppler={candidate.doppler_hz:+.1f} Hz, "
+                    f"code={candidate.code_phase_samples}, metric={candidate.metric:.2f}"
+                    for candidate in sorted(result.segment_candidates, key=lambda item: item.metric, reverse=True)[:8]
                 ]
             )
         )
@@ -226,6 +252,21 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.center_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{best.doppler_hz:+.1f}"))
         if sweep_entries:
             self.center_table.selectRow(0)
+
+    def update_sample_rate_survey(self, survey_entries) -> None:
+        """Show ranked sample-rate hypotheses."""
+
+        self.rate_table.setRowCount(len(survey_entries))
+        for row, entry in enumerate(survey_entries):
+            best = entry.best_result.best_candidate
+            self.rate_table.setItem(row, 0, QtWidgets.QTableWidgetItem(f"{entry.sample_rate_hz:.1f}"))
+            self.rate_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(entry.best_result.prn)))
+            self.rate_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(entry.best_result.consistent_segments)))
+            self.rate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{entry.best_result.consistency_score:.2f}"))
+            self.rate_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{best.metric:.2f}"))
+            self.rate_table.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{best.carrier_frequency_hz:.1f}"))
+        if survey_entries:
+            self.rate_table.selectRow(0)
 
     def build_search_centers(self) -> list[float]:
         """Return the configured sweep centers."""
@@ -248,3 +289,15 @@ class AcquisitionTab(QtWidgets.QWidget):
         except (TypeError, ValueError, AttributeError):
             return
         self.sweep_selection_changed.emit(center_hz, prn)
+
+    def _emit_sample_rate_selection_changed(self) -> None:
+        items = self.rate_table.selectedItems()
+        if not items:
+            return
+        row = items[0].row()
+        try:
+            sample_rate_hz = float(self.rate_table.item(row, 0).text())
+            prn = int(self.rate_table.item(row, 1).text())
+        except (TypeError, ValueError, AttributeError):
+            return
+        self.sample_rate_selection_changed.emit(sample_rate_hz, prn)

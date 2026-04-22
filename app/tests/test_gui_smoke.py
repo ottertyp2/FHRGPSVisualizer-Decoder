@@ -12,3 +12,4 @@ def test_main_window_smoke() -> None:
     window = MainWindow()
     assert window.tabs.count() == 8
     assert window.acquisition_tab.center_sweep_button.text() == "Sweep Search Center"
+    assert window.acquisition_tab.auto_detect_button.text() == "Auto Detect Capture"

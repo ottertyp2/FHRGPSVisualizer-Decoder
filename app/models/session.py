@@ -46,6 +46,7 @@ class FileMetadata:
     sample_rate_hz: float
     total_samples: int
     estimated_duration_s: float
+    common_rate_duration_hints: dict[str, float] = field(default_factory=dict)
     preview_stats: dict[str, float] = field(default_factory=dict)
     preview_samples: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=np.complex64))
 
@@ -74,6 +75,9 @@ class AcquisitionResult:
     heatmap: np.ndarray
     best_candidate: AcquisitionCandidate
     candidates: list[AcquisitionCandidate] = field(default_factory=list)
+    segment_candidates: list[AcquisitionCandidate] = field(default_factory=list)
+    consistent_segments: int = 0
+    consistency_score: float = 0.0
 
 
 @dataclass(slots=True)
@@ -89,6 +93,22 @@ class SearchCenterSweepResult:
     """Ranked results from sweeping multiple IF / search-center hypotheses."""
 
     entries: list[SearchCenterSweepEntry] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SampleRateSurveyEntry:
+    """Acquisition ranking for one sample-rate hypothesis."""
+
+    sample_rate_hz: float
+    best_result: AcquisitionResult
+    all_results: list[AcquisitionResult] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SampleRateSurveyResult:
+    """Ranked results from trying multiple sample-rate hypotheses."""
+
+    entries: list[SampleRateSurveyEntry] = field(default_factory=list)
 
 
 @dataclass(slots=True)

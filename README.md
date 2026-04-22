@@ -5,6 +5,8 @@ An educational offline analysis tool for recorded GPS L1 C/A IQ data. The first 
 - file loading for `complex64` IQ (`float32 I + float32 Q`)
 - raw signal, spectrum, waterfall, and IQ-plane visualization
 - PRN acquisition over Doppler and code phase
+- segment-consistency scoring so repeated weak PRN hits can be separated from one-off noise peaks
+- automatic survey of common GNSS sample-rate hypotheses for uncertain captures
 - simple tracking with Early/Prompt/Late correlators
 - 50 bps bit extraction from 1 ms prompt integrations
 - LNAV preamble detection, word sync, and parity checks
@@ -15,6 +17,8 @@ An educational offline analysis tool for recorded GPS L1 C/A IQ data. The first 
 This version intentionally does **not** compute position, pseudoranges, or a full PVT solution.
 
 The current default assumption is a `6 MSa/s` little-endian `complex64` recording. That is generally enough for GPS L1 C/A offline acquisition and tracking; if decoding is still weak, the limiting factors are more likely IF/search-center assumptions, front-end filtering, or signal strength than raw sample-rate alone.
+
+For ambiguous recordings, the acquisition tab can now auto-survey common GNSS sample rates such as `2.046 MSa/s`, `4.092 MSa/s`, and `6.000 MSa/s`, then rank which hypothesis produces the most repeatable PRN evidence across the file.
 
 ## Large recordings
 
@@ -48,10 +52,11 @@ python -m app.main
 3. Start with the default `6 MSa/s` sample rate unless you know the capture used a different rate.
 4. Preview a selected window.
 5. Run acquisition for a PRN.
-6. Optionally scan PRNs 1..32 to rank likely visible satellites.
-7. Start tracking for the selected PRN from the acquisition tab or tracking tab.
-8. Decode navigation bits and inspect LNAV word sync for that PRN.
-9. Run the benchmark to estimate how well the laptop handles large recordings.
+6. Optionally run `Auto Detect Capture` to compare common sample-rate hypotheses and pick the most repeatable one.
+7. Optionally scan PRNs 1..32 to rank likely visible satellites.
+8. Start tracking for the selected PRN from the acquisition tab or tracking tab.
+9. Decode navigation bits and inspect LNAV word sync for that PRN.
+10. Run the benchmark to estimate how well the laptop handles large recordings.
 
 ## Notes on input
 
