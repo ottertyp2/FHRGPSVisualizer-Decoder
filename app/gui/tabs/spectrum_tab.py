@@ -104,21 +104,22 @@ class SpectrumTab(QtWidgets.QWidget):
         session = session or SessionConfig()
         doppler_min = float(session.doppler_min)
         doppler_max = float(session.doppler_max)
-        center_hz = 0.0
-        self.search_region.setRegion((doppler_min, doppler_max))
+        center_hz = 0.0 if session.is_baseband else float(session.if_frequency_hz)
+        self.search_region.setRegion((center_hz + doppler_min, center_hz + doppler_max))
         self.center_line.setPos(center_hz)
 
         if acquisition is not None:
             self.best_line.setVisible(True)
-            self.best_line.setPos(float(acquisition.best_candidate.doppler_hz))
+            self.best_line.setPos(float(acquisition.best_candidate.carrier_frequency_hz))
             self.search_label.setText(
-                "Search overlay: blue = nominal center after wipeoff, "
-                f"orange = searched Doppler band [{doppler_min:.0f}, {doppler_max:.0f}] Hz, "
-                f"red = best PRN {acquisition.prn} peak at {acquisition.best_candidate.doppler_hz:.1f} Hz."
+                "Search overlay: blue = IF / search center, "
+                f"orange = searched band [{center_hz + doppler_min:.0f}, {center_hz + doppler_max:.0f}] Hz, "
+                f"red = best PRN {acquisition.prn} peak at {acquisition.best_candidate.carrier_frequency_hz:.1f} Hz "
+                f"(relative Doppler {acquisition.best_candidate.doppler_hz:+.1f} Hz)."
             )
         else:
             self.best_line.setVisible(False)
             self.search_label.setText(
-                "Search overlay: blue = nominal center after wipeoff, "
-                f"orange = searched Doppler band [{doppler_min:.0f}, {doppler_max:.0f}] Hz."
+                "Search overlay: blue = IF / search center, "
+                f"orange = searched band [{center_hz + doppler_min:.0f}, {center_hz + doppler_max:.0f}] Hz."
             )

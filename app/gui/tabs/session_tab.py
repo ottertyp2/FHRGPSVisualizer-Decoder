@@ -44,6 +44,15 @@ class SessionTab(QtWidgets.QWidget):
         self.center_frequency_spin.setDecimals(1)
         self.center_frequency_spin.setValue(1_575_420_000.0)
         self.center_frequency_spin.setSuffix(" Hz")
+        self.if_frequency_spin = QtWidgets.QDoubleSpinBox()
+        self.if_frequency_spin.setRange(-50_000_000.0, 50_000_000.0)
+        self.if_frequency_spin.setDecimals(1)
+        self.if_frequency_spin.setValue(0.0)
+        self.if_frequency_spin.setSuffix(" Hz")
+        self.if_frequency_spin.setToolTip(
+            "Intermediate frequency / search center inside the sampled spectrum. "
+            "Use 0 Hz for true baseband data."
+        )
         self.baseband_checkbox = QtWidgets.QCheckBox("Baseband / residual Doppler search")
         self.baseband_checkbox.setChecked(True)
         self.start_sample_spin = QtWidgets.QSpinBox()
@@ -62,6 +71,7 @@ class SessionTab(QtWidgets.QWidget):
         form.addRow("Sample rate", self.sample_rate_spin)
         form.addRow("Center frequency", self.center_frequency_spin)
         form.addRow("Signal mode", self.baseband_checkbox)
+        form.addRow("IF / search center", self.if_frequency_spin)
         form.addRow("Start sample", self.start_sample_spin)
         form.addRow("Window samples", self.sample_count_spin)
         form.addRow("RAM preload", self.preload_checkbox)
@@ -125,9 +135,20 @@ class SessionTab(QtWidgets.QWidget):
         self.benchmark_button.clicked.connect(self.benchmark_requested.emit)
 
         self.sample_rate_spin.valueChanged.connect(self.settings_changed.emit)
+        self.if_frequency_spin.valueChanged.connect(self.settings_changed.emit)
         self.start_sample_spin.valueChanged.connect(self.settings_changed.emit)
         self.sample_count_spin.valueChanged.connect(self.settings_changed.emit)
         self.preload_checkbox.toggled.connect(self.settings_changed.emit)
+        self.baseband_checkbox.toggled.connect(self._on_baseband_toggled)
+        self._on_baseband_toggled(self.baseband_checkbox.isChecked())
+
+    def _on_baseband_toggled(self, checked: bool) -> None:
+        """Enable or disable the IF hint depending on the signal mode."""
+
+        self.if_frequency_spin.setEnabled(not checked)
+        if checked:
+            self.if_frequency_spin.setValue(0.0)
+        self.settings_changed.emit()
 
     def preload_enabled(self) -> bool:
         """Return whether preload mode is enabled."""
@@ -147,6 +168,7 @@ class SessionTab(QtWidgets.QWidget):
             sample_rate=float(self.sample_rate_spin.value()),
             center_frequency=float(self.center_frequency_spin.value()),
             is_baseband=self.baseband_checkbox.isChecked(),
+            if_frequency_hz=float(self.if_frequency_spin.value()),
             start_sample=int(self.start_sample_spin.value()),
             sample_count=int(self.sample_count_spin.value()),
         )

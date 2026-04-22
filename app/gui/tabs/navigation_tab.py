@@ -107,7 +107,8 @@ class NavigationTab(QtWidgets.QWidget):
         evidence_lines = []
         if acquisition is not None:
             evidence_lines.append(
-                f"Started from acquisition peak at {acquisition.best_candidate.doppler_hz:.1f} Hz and code phase {acquisition.best_candidate.code_phase_samples}."
+                f"Started from acquisition peak at search frequency {acquisition.best_candidate.carrier_frequency_hz:.1f} Hz "
+                f"(relative Doppler {acquisition.best_candidate.doppler_hz:+.1f} Hz) and code phase {acquisition.best_candidate.code_phase_samples}."
             )
         if tracking is not None:
             evidence_lines.append(

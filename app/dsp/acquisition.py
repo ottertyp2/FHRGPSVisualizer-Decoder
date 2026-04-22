@@ -19,6 +19,7 @@ class AcquisitionConfig:
     doppler_min: int
     doppler_max: int
     doppler_step: int
+    search_center_hz: float = 0.0
     integration_ms: int = 4
 
 
@@ -49,12 +50,13 @@ def acquire_signal(
     time_vector = np.arange(samples_per_ms, dtype=np.float64) / sample_rate
 
     for row, doppler in enumerate(doppler_bins):
+        search_frequency_hz = config.search_center_hz + float(doppler)
         metrics = np.zeros(samples_per_ms, dtype=np.float64)
         for block_index in range(usable):
             start = block_index * samples_per_ms
             stop = start + samples_per_ms
             block = signal[start:stop]
-            wiped = block * np.exp(-1j * 2.0 * np.pi * doppler * time_vector)
+            wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
             correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
             metrics += np.abs(correlation) ** 2
         heatmap[row, :] = metrics.astype(np.float32)
@@ -70,6 +72,7 @@ def acquire_signal(
     best = AcquisitionCandidate(
         prn=config.prn,
         doppler_hz=float(doppler_bins[best_row]),
+        carrier_frequency_hz=float(config.search_center_hz + doppler_bins[best_row]),
         code_phase_samples=best_code_phase,
         metric=best_metric,
     )
@@ -87,6 +90,7 @@ def acquire_signal(
             AcquisitionCandidate(
                 prn=config.prn,
                 doppler_hz=float(doppler_bins[row]),
+                carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
                 code_phase_samples=code_phase,
                 metric=float(heatmap[row, col] / noise_floor),
             )
@@ -95,11 +99,13 @@ def acquire_signal(
     if log_callback:
         log_callback(
             f"Acquisition PRN {config.prn}: best peak metric {best.metric:.2f} at "
-            f"{best.doppler_hz:.1f} Hz, code phase {best.code_phase_samples} samples."
+            f"search frequency {best.carrier_frequency_hz:.1f} Hz "
+            f"(relative Doppler {best.doppler_hz:+.1f} Hz), code phase {best.code_phase_samples} samples."
         )
 
     return AcquisitionResult(
         prn=config.prn,
+        search_center_hz=float(config.search_center_hz),
         doppler_bins_hz=doppler_bins.astype(np.float32),
         code_phases_samples=np.arange(samples_per_ms, dtype=np.int32),
         heatmap=heatmap,
@@ -119,6 +125,7 @@ def acquisition_from_session(
     config = AcquisitionConfig(
         sample_rate=session.sample_rate,
         prn=session.prn,
+        search_center_hz=0.0 if session.is_baseband else session.if_frequency_hz,
         doppler_min=session.doppler_min,
         doppler_max=session.doppler_max,
         doppler_step=session.doppler_step,
@@ -144,6 +151,7 @@ def scan_prns_from_session(
         config = AcquisitionConfig(
             sample_rate=session.sample_rate,
             prn=prn,
+            search_center_hz=0.0 if session.is_baseband else session.if_frequency_hz,
             doppler_min=session.doppler_min,
             doppler_max=session.doppler_max,
             doppler_step=session.doppler_step,

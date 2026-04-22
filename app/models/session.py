@@ -16,6 +16,7 @@ class SessionConfig:
     sample_rate: float = 4_092_000.0
     center_frequency: float = 1_575_420_000.0
     is_baseband: bool = True
+    if_frequency_hz: float = 0.0
     data_type: str = "complex64_le"
     start_sample: int = 0
     sample_count: int = 4_092_000
@@ -52,6 +53,7 @@ class AcquisitionCandidate:
 
     prn: int
     doppler_hz: float
+    carrier_frequency_hz: float
     code_phase_samples: int
     metric: float
 
@@ -61,6 +63,7 @@ class AcquisitionResult:
     """Full acquisition search output."""
 
     prn: int
+    search_center_hz: float
     doppler_bins_hz: np.ndarray
     code_phases_samples: np.ndarray
     heatmap: np.ndarray

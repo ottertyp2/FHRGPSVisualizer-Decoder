@@ -114,7 +114,8 @@ class TrackingTab(QtWidgets.QWidget):
         if acquisition is not None:
             evidence_lines.extend(
                 [
-                    f"Acquisition start point: Doppler {acquisition.best_candidate.doppler_hz:.1f} Hz, "
+                    f"Acquisition start point: search frequency {acquisition.best_candidate.carrier_frequency_hz:.1f} Hz, "
+                    f"relative Doppler {acquisition.best_candidate.doppler_hz:+.1f} Hz, "
                     f"code phase {acquisition.best_candidate.code_phase_samples} samples, metric {acquisition.best_candidate.metric:.2f}.",
                 ]
             )

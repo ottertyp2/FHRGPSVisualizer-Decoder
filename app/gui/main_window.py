@@ -161,11 +161,12 @@ class MainWindow(QtWidgets.QMainWindow):
         total_ram, avail_ram = self._memory_status()
         planned = self._planned_ram_bytes()
         mode = "full source preload" if self.session_tab.preload_enabled() else "selected window only"
+        signal_mode = "baseband" if self.session.is_baseband else f"IF center {self.session.if_frequency_hz:.1f} Hz"
         total_text = f"{total_ram / (1024 ** 3):.1f} GiB" if total_ram else "unknown"
         avail_text = f"{avail_ram / (1024 ** 3):.1f} GiB" if avail_ram else "unknown"
         planned_text = f"{planned / (1024 ** 2):.1f} MiB"
         self.session_tab.set_ram_status(
-            f"RAM status: mode={mode}, planned load={planned_text}, available RAM={avail_text}, total RAM={total_text}."
+            f"RAM status: mode={mode}, signal={signal_mode}, planned load={planned_text}, available RAM={avail_text}, total RAM={total_text}."
         )
 
     def _confirm_large_ram_load(self, bytes_to_load: int) -> bool:
@@ -465,10 +466,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 acquisition=result,
             )
         self.session_tab.set_progress(100)
+        near_edge = abs(result.best_candidate.doppler_hz) >= (max(abs(self.session.doppler_min), abs(self.session.doppler_max)) - self.session.doppler_step)
         if result.best_candidate.metric < 6.0:
             self.append_log(
-                f"Acquisition finished, but the best metric is only {result.best_candidate.metric:.2f}. "
+                f"Acquisition finished, but the best metric is only {result.best_candidate.metric:.2f} at "
+                f"{result.best_candidate.carrier_frequency_hz:.1f} Hz "
+                f"(relative Doppler {result.best_candidate.doppler_hz:+.1f} Hz). "
                 "That is weak, so the sample rate / IF assumptions may still be wrong or the signal may be faint."
+            )
+        elif near_edge:
+            self.append_log(
+                "Acquisition finished, but the best peak sits near the search-band edge. "
+                "That often means the IF / search center should be adjusted."
             )
         else:
             self.append_log("Acquisition finished.")
@@ -490,8 +499,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session_tab.set_progress(100)
         if results and results[0].best_candidate.metric < 6.0:
             self.append_log(
-                f"PRN scan finished. Best hypothesis is PRN {results[0].prn} with metric {results[0].best_candidate.metric:.2f}, "
+                f"PRN scan finished. Best hypothesis is PRN {results[0].prn} at {results[0].best_candidate.carrier_frequency_hz:.1f} Hz "
+                f"(relative Doppler {results[0].best_candidate.doppler_hz:+.1f} Hz) with metric {results[0].best_candidate.metric:.2f}, "
                 "which is still weak. The file duration is probably not the main issue; check sample rate, IF/baseband assumption, and signal quality."
+            )
+        elif results and abs(results[0].best_candidate.doppler_hz) >= (max(abs(self.session.doppler_min), abs(self.session.doppler_max)) - self.session.doppler_step):
+            self.append_log(
+                "PRN scan finished, but the best hypothesis is near the edge of the Doppler band. "
+                "That suggests the IF / search center may need to be moved."
             )
         else:
             self.append_log(f"PRN scan finished. Ranked {len(results)} satellite hypotheses.")

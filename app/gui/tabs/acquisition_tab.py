@@ -70,8 +70,8 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.heatmap_plot.addItem(self.heatmap_image)
         left_layout.addWidget(self.heatmap_plot, stretch=1)
 
-        self.candidate_table = QtWidgets.QTableWidget(0, 4)
-        self.candidate_table.setHorizontalHeaderLabels(["PRN", "Doppler [Hz]", "Code phase", "Metric"])
+        self.candidate_table = QtWidgets.QTableWidget(0, 5)
+        self.candidate_table.setHorizontalHeaderLabels(["PRN", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Metric"])
         self.candidate_table.horizontalHeader().setStretchLastSection(True)
         left_layout.addWidget(self.candidate_table, stretch=1)
         splitter.addWidget(left_panel)
@@ -79,8 +79,8 @@ class AcquisitionTab(QtWidgets.QWidget):
         right_panel = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.addWidget(QtWidgets.QLabel("Detected / inspected satellites"))
-        self.satellite_table = QtWidgets.QTableWidget(0, 5)
-        self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Doppler [Hz]", "Code phase", "Interpretation"])
+        self.satellite_table = QtWidgets.QTableWidget(0, 6)
+        self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Interpretation"])
         self.satellite_table.horizontalHeader().setStretchLastSection(True)
         right_layout.addWidget(self.satellite_table, stretch=1)
 
@@ -114,7 +114,8 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         self.summary_label.setText(
             f"Best peak: PRN {result.best_candidate.prn}, "
-            f"Doppler {result.best_candidate.doppler_hz:.1f} Hz, "
+            f"search frequency {result.best_candidate.carrier_frequency_hz:.1f} Hz, "
+            f"relative Doppler {result.best_candidate.doppler_hz:+.1f} Hz, "
             f"code phase {result.best_candidate.code_phase_samples} samples, "
             f"metric {result.best_candidate.metric:.2f}. "
             "A strong, isolated peak means the local PRN aligns well with the recording."
@@ -130,9 +131,10 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.candidate_table.setRowCount(len(result.candidates))
         for row, candidate in enumerate(result.candidates):
             self.candidate_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
-            self.candidate_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:.1f}"))
-            self.candidate_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
-            self.candidate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
+            self.candidate_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.carrier_frequency_hz:.1f}"))
+            self.candidate_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:+.1f}"))
+            self.candidate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
+            self.candidate_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
 
         results = total_results or [result]
         self.satellite_table.setRowCount(len(results))
@@ -141,21 +143,25 @@ class AcquisitionTab(QtWidgets.QWidget):
             interpretation = "likely visible" if candidate.metric >= 6.0 else "weak / uncertain"
             self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
             self.satellite_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
-            self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:.1f}"))
-            self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
-            self.satellite_table.setItem(row, 4, QtWidgets.QTableWidgetItem(interpretation))
+            self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.carrier_frequency_hz:.1f}"))
+            self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:+.1f}"))
+            self.satellite_table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
+            self.satellite_table.setItem(row, 5, QtWidgets.QTableWidgetItem(interpretation))
 
         self.evidence_text.setPlainText(
             "\n".join(
                 [
                     f"Selected PRN: {result.prn}",
-                    f"Best Doppler bin: {result.best_candidate.doppler_hz:.1f} Hz",
+                    f"Search center / IF: {result.search_center_hz:.1f} Hz",
+                    f"Best searched frequency: {result.best_candidate.carrier_frequency_hz:.1f} Hz",
+                    f"Relative Doppler bin: {result.best_candidate.doppler_hz:+.1f} Hz",
                     f"Best code phase: {result.best_candidate.code_phase_samples} samples",
                     f"Peak metric: {result.best_candidate.metric:.2f}",
                     "",
                     "Interpretation:",
                     "- The brighter the heatmap peak, the better the local PRN matches the signal.",
-                    "- Doppler tells you how much carrier offset had to be removed.",
+                    "- Search frequency is the actual tone removed in the sample domain.",
+                    "- Relative Doppler is the offset around the chosen IF / search center.",
                     "- Code phase tells you where the PRN alignment happens within the 1 ms code.",
                     "- The top candidates below show whether one peak dominates or the result is ambiguous.",
                 ]

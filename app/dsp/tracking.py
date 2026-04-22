@@ -30,7 +30,8 @@ def _track_blocks(
     spacing = float(session.early_late_spacing_chips)
     code_phase_chips = code_phase_samples_to_chips(best.code_phase_samples, session.sample_rate)
     code_freq = CA_CODE_RATE_HZ
-    carrier_freq = float(best.doppler_hz)
+    search_center_hz = 0.0 if session.is_baseband else float(session.if_frequency_hz)
+    carrier_freq = float(best.carrier_frequency_hz)
     carrier_phase = 0.0
     prev_prompt = 0.0j
 
@@ -104,7 +105,7 @@ def _track_blocks(
         carrier_freq += session.pll_gain * pll_disc / (2.0 * np.pi)
         code_freq = CA_CODE_RATE_HZ - session.dll_gain * dll_disc * 400.0
 
-        doppler_est[ms_index] = float(carrier_freq)
+        doppler_est[ms_index] = float(carrier_freq - search_center_hz)
         code_freq_est[ms_index] = float(code_freq)
         lock_metric[ms_index] = float(np.abs(prompt.real) / (np.abs(prompt.imag) + 1e-6))
 
@@ -129,7 +130,8 @@ def _track_blocks(
     if log_callback:
         state = "locked" if lock_detected else "not locked"
         log_callback(
-            f"Tracking PRN {session.prn}: processed {valid} ms, final Doppler {doppler_est[valid - 1]:.1f} Hz, {state}."
+            f"Tracking PRN {session.prn}: processed {valid} ms, final carrier {carrier_freq:.1f} Hz "
+            f"(relative Doppler {doppler_est[valid - 1]:+.1f} Hz), {state}."
         )
 
     return TrackingState(
