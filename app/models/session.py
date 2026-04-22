@@ -13,18 +13,20 @@ class SessionConfig:
     """User-selected session settings for offline analysis."""
 
     file_path: str | None = None
-    sample_rate: float = 4_092_000.0
+    sample_rate: float = 6_000_000.0
     center_frequency: float = 1_575_420_000.0
     is_baseband: bool = True
     if_frequency_hz: float = 0.0
     data_type: str = "complex64_le"
     start_sample: int = 0
-    sample_count: int = 4_092_000
+    sample_count: int = 6_000_000
     prn: int = 1
     doppler_min: int = -6_000
     doppler_max: int = 6_000
     doppler_step: int = 250
-    integration_ms: int = 4
+    integration_ms: int = 80
+    spread_acquisition_blocks: bool = False
+    acquisition_segment_count: int = 8
     tracking_ms: int = 400
     early_late_spacing_chips: float = 0.5
     dll_gain: float = 0.08
@@ -57,6 +59,7 @@ class AcquisitionCandidate:
     carrier_frequency_hz: float
     code_phase_samples: int
     metric: float
+    segment_start_sample: int = 0
 
 
 @dataclass(slots=True)
@@ -64,6 +67,7 @@ class AcquisitionResult:
     """Full acquisition search output."""
 
     prn: int
+    sample_rate_hz: float
     search_center_hz: float
     doppler_bins_hz: np.ndarray
     code_phases_samples: np.ndarray

@@ -28,7 +28,7 @@ def _build_demo_nav_bits(num_bits: int) -> np.ndarray:
 
 
 def generate_demo_signal(
-    sample_rate: float = 4_092_000.0,
+    sample_rate: float = 6_000_000.0,
     duration_s: float = 0.5,
     prn: int = 1,
     doppler_hz: float = 2_000.0,

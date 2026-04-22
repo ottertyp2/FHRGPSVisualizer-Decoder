@@ -42,10 +42,23 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.doppler_step_spin = QtWidgets.QSpinBox()
         self.doppler_step_spin.setRange(50, 2_000)
         self.doppler_step_spin.setValue(250)
+        self.integration_spin = QtWidgets.QSpinBox()
+        self.integration_spin.setRange(1, 500)
+        self.integration_spin.setValue(80)
+        self.integration_spin.setSuffix(" ms blocks")
+        self.segment_count_spin = QtWidgets.QSpinBox()
+        self.segment_count_spin.setRange(1, 32)
+        self.segment_count_spin.setValue(8)
+        self.segment_count_spin.setSuffix(" segments")
+        self.spread_blocks_checkbox = QtWidgets.QCheckBox("Spread 1 ms blocks across loaded source")
+        self.spread_blocks_checkbox.setChecked(False)
         controls.addRow("PRN", self.prn_spin)
         controls.addRow("Doppler min [Hz]", self.doppler_min_spin)
         controls.addRow("Doppler max [Hz]", self.doppler_max_spin)
         controls.addRow("Doppler step [Hz]", self.doppler_step_spin)
+        controls.addRow("Accumulation", self.integration_spin)
+        controls.addRow("Deep search", self.segment_count_spin)
+        controls.addRow("Weak-signal mode", self.spread_blocks_checkbox)
         layout.addLayout(controls)
 
         sweep_group = QtWidgets.QGroupBox("Auto-search IF / center sweep")
@@ -145,6 +158,7 @@ class AcquisitionTab(QtWidgets.QWidget):
             f"search frequency {result.best_candidate.carrier_frequency_hz:.1f} Hz, "
             f"relative Doppler {result.best_candidate.doppler_hz:+.1f} Hz, "
             f"code phase {result.best_candidate.code_phase_samples} samples, "
+            f"segment start {result.best_candidate.segment_start_sample / max(result.sample_rate_hz, 1.0):.3f} s, "
             f"metric {result.best_candidate.metric:.2f}. "
             "A strong, isolated peak means the local PRN aligns well with the recording."
         )

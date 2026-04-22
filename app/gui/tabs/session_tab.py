@@ -27,7 +27,8 @@ class SessionTab(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
 
         info_label = QtWidgets.QLabel(
-            "Load a complex64 IQ file or generate a demo signal, then inspect a sample window."
+            "Load a complex64 IQ file or generate a demo signal, then inspect a sample window. "
+            "The default workflow assumes 6 MSa/s complex baseband IQ."
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -38,7 +39,7 @@ class SessionTab(QtWidgets.QWidget):
         self.sample_rate_spin = QtWidgets.QDoubleSpinBox()
         self.sample_rate_spin.setRange(1_000.0, 100_000_000.0)
         self.sample_rate_spin.setDecimals(1)
-        self.sample_rate_spin.setValue(4_092_000.0)
+        self.sample_rate_spin.setValue(6_000_000.0)
         self.sample_rate_spin.setSuffix(" Sa/s")
         self.center_frequency_spin = QtWidgets.QDoubleSpinBox()
         self.center_frequency_spin.setRange(0.0, 10_000_000_000.0)
@@ -60,11 +61,11 @@ class SessionTab(QtWidgets.QWidget):
         self.start_sample_spin.setRange(0, 2_000_000_000)
         self.sample_count_spin = QtWidgets.QSpinBox()
         self.sample_count_spin.setRange(1_000, 2_000_000_000)
-        self.sample_count_spin.setValue(4_092_000)
-        self.preload_checkbox = QtWidgets.QCheckBox("Preload full window to RAM")
+        self.sample_count_spin.setValue(6_000_000)
+        self.preload_checkbox = QtWidgets.QCheckBox("Preload full source to RAM")
         self.preload_checkbox.setChecked(True)
         self.preload_checkbox.setToolTip(
-            "If enabled, the tool loads the complete selected source into RAM before analysis. "
+            "If enabled, the tool loads the complete selected IQ source into RAM before analysis. "
             "If disabled, only the active analysis window is loaded on demand."
         )
 

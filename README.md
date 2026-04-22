@@ -14,6 +14,8 @@ An educational offline analysis tool for recorded GPS L1 C/A IQ data. The first 
 
 This version intentionally does **not** compute position, pseudoranges, or a full PVT solution.
 
+The current default assumption is a `6 MSa/s` little-endian `complex64` recording. That is generally enough for GPS L1 C/A offline acquisition and tracking; if decoding is still weak, the limiting factors are more likely IF/search-center assumptions, front-end filtering, or signal strength than raw sample-rate alone.
+
 ## Large recordings
 
 - The GUI is designed to work on very large recordings by reading only selected windows for display.
@@ -42,8 +44,8 @@ python -m app.main
 ## Example workflow
 
 1. Open the app.
-2. Load `test1.bin` or generate a demo signal.
-3. Enter the sample rate and center frequency manually.
+2. Load `test3min.bin`, `test1.bin`, or generate a demo signal.
+3. Start with the default `6 MSa/s` sample rate unless you know the capture used a different rate.
 4. Preview a selected window.
 5. Run acquisition for a PRN.
 6. Optionally scan PRNs 1..32 to rank likely visible satellites.

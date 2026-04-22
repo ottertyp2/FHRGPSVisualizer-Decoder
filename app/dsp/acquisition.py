@@ -27,6 +27,45 @@ class AcquisitionConfig:
     doppler_step: int
     search_center_hz: float = 0.0
     integration_ms: int = 4
+    spread_acquisition_blocks: bool = True
+    acquisition_segment_count: int = 1
+
+
+def _select_ms_blocks(
+    samples: np.ndarray,
+    sample_rate: float,
+    block_count: int,
+    spread_blocks: bool,
+) -> np.ndarray:
+    """Select 1 ms blocks either contiguously or spread across the full source."""
+
+    samples_per_ms = int(round(sample_rate * 1e-3))
+    total_ms = samples.size // samples_per_ms
+    usable = min(max(1, int(block_count)), total_ms)
+    if usable <= 0:
+        return np.empty((0, samples_per_ms), dtype=np.complex64)
+
+    if spread_blocks and total_ms > usable:
+        starts_ms = np.linspace(0, total_ms - 1, num=usable, dtype=int)
+    else:
+        starts_ms = np.arange(usable, dtype=int)
+
+    blocks = np.empty((usable, samples_per_ms), dtype=np.complex64)
+    for row, start_ms in enumerate(starts_ms):
+        start = int(start_ms) * samples_per_ms
+        stop = start + samples_per_ms
+        blocks[row, :] = samples[start:stop]
+    return blocks
+
+
+def _select_segment_starts_ms(total_ms: int, block_count: int, segment_count: int) -> np.ndarray:
+    """Return evenly spaced segment starts for deeper acquisition."""
+
+    usable_segment_count = max(1, int(segment_count))
+    max_start = max(0, total_ms - max(1, int(block_count)))
+    if usable_segment_count == 1 or max_start == 0:
+        return np.asarray([0], dtype=int)
+    return np.linspace(0, max_start, num=usable_segment_count, dtype=int)
 
 
 def acquire_signal(
@@ -42,47 +81,83 @@ def acquire_signal(
 
     sample_rate = config.sample_rate
     samples_per_ms = int(round(sample_rate * 1e-3))
-    integration_ms = max(1, int(config.integration_ms))
-    usable = min(samples.size // samples_per_ms, integration_ms)
-    if usable == 0:
+    total_ms = samples.size // samples_per_ms
+    segment_starts_ms = _select_segment_starts_ms(total_ms, config.integration_ms, config.acquisition_segment_count)
+    if segment_starts_ms.size == 0:
         raise ValueError("Not enough data for one 1 ms acquisition block.")
 
-    total = usable * samples_per_ms
-    signal = samples[:total]
     local_code = sample_ca_code(config.prn, sample_rate, samples_per_ms)
     code_fft = np.conj(np.fft.fft(local_code))
     doppler_bins = np.arange(config.doppler_min, config.doppler_max + config.doppler_step, config.doppler_step)
-    heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
     time_vector = np.arange(samples_per_ms, dtype=np.float64) / sample_rate
 
-    for row, doppler in enumerate(doppler_bins):
-        search_frequency_hz = config.search_center_hz + float(doppler)
-        metrics = np.zeros(samples_per_ms, dtype=np.float64)
-        for block_index in range(usable):
-            start = block_index * samples_per_ms
-            stop = start + samples_per_ms
-            block = signal[start:stop]
-            wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
-            correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
-            metrics += np.abs(correlation) ** 2
-        heatmap[row, :] = metrics.astype(np.float32)
-        if progress_callback:
-            progress_callback(int(100 * (row + 1) / doppler_bins.size))
+    best_heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
+    best_metric = -np.inf
+    best_segment_start_ms = 0
+    best_row = 0
+    best_col = 0
+    best_usable = 0
 
-    flat = heatmap.ravel()
-    best_flat_index = int(np.argmax(flat))
-    best_row, best_col = np.unravel_index(best_flat_index, heatmap.shape)
+    for segment_index, segment_start_ms in enumerate(segment_starts_ms):
+        segment_start = int(segment_start_ms) * samples_per_ms
+        if config.acquisition_segment_count > 1:
+            segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
+            segment_samples = samples[segment_start:segment_stop]
+            segment_spread = False
+        else:
+            segment_samples = samples[segment_start:]
+            segment_spread = bool(config.spread_acquisition_blocks)
+
+        selected_blocks = _select_ms_blocks(
+            segment_samples,
+            sample_rate,
+            block_count=max(1, int(config.integration_ms)),
+            spread_blocks=segment_spread,
+        )
+        usable = int(selected_blocks.shape[0])
+        if usable == 0:
+            continue
+
+        heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
+        for row, doppler in enumerate(doppler_bins):
+            search_frequency_hz = config.search_center_hz + float(doppler)
+            metrics = np.zeros(samples_per_ms, dtype=np.float64)
+            for block_index in range(usable):
+                block = selected_blocks[block_index]
+                wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
+                correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
+                metrics += np.abs(correlation) ** 2
+            heatmap[row, :] = metrics.astype(np.float32)
+
+        flat = heatmap.ravel()
+        flat_index = int(np.argmax(flat))
+        row, col = np.unravel_index(flat_index, heatmap.shape)
+        noise_floor = float(np.mean(heatmap) + 1e-12)
+        metric = float(heatmap[row, col] / noise_floor)
+        if metric > best_metric:
+            best_metric = metric
+            best_heatmap = heatmap
+            best_segment_start_ms = int(segment_start_ms)
+            best_row = int(row)
+            best_col = int(col)
+            best_usable = usable
+
+        if progress_callback:
+            progress_callback(int(100 * (segment_index + 1) / max(1, segment_starts_ms.size)))
+
+    heatmap = best_heatmap
     noise_floor = float(np.mean(heatmap) + 1e-12)
-    best_metric = float(heatmap[best_row, best_col] / noise_floor)
     best_code_phase = int((samples_per_ms - best_col) % samples_per_ms)
     best = AcquisitionCandidate(
         prn=config.prn,
         doppler_hz=float(doppler_bins[best_row]),
         carrier_frequency_hz=float(config.search_center_hz + doppler_bins[best_row]),
         code_phase_samples=best_code_phase,
-        metric=best_metric,
+        segment_start_sample=int(best_segment_start_ms * samples_per_ms),
+        metric=float(best_metric),
     )
 
+    flat = heatmap.ravel()
     top_indices = np.argsort(flat)[-8:][::-1]
     candidates: list[AcquisitionCandidate] = []
     used_locations: list[tuple[int, int]] = []
@@ -98,6 +173,7 @@ def acquire_signal(
                 doppler_hz=float(doppler_bins[row]),
                 carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
                 code_phase_samples=code_phase,
+                segment_start_sample=int(best_segment_start_ms * samples_per_ms),
                 metric=float(heatmap[row, col] / noise_floor),
             )
         )
@@ -106,11 +182,15 @@ def acquire_signal(
         log_callback(
             f"Acquisition PRN {config.prn}: best peak metric {best.metric:.2f} at "
             f"search frequency {best.carrier_frequency_hz:.1f} Hz "
-            f"(relative Doppler {best.doppler_hz:+.1f} Hz), code phase {best.code_phase_samples} samples."
+            f"(relative Doppler {best.doppler_hz:+.1f} Hz), code phase {best.code_phase_samples} samples, "
+            f"using {best_usable} x 1 ms blocks starting at {best.segment_start_sample / sample_rate:.3f} s"
+            f"{' spread across the source' if config.acquisition_segment_count == 1 and config.spread_acquisition_blocks else ''}"
+            f"{' from a segmented deep search' if config.acquisition_segment_count > 1 else ''}."
         )
 
     return AcquisitionResult(
         prn=config.prn,
+        sample_rate_hz=float(sample_rate),
         search_center_hz=float(config.search_center_hz),
         doppler_bins_hz=doppler_bins.astype(np.float32),
         code_phases_samples=np.arange(samples_per_ms, dtype=np.int32),
@@ -136,6 +216,8 @@ def acquisition_from_session(
         doppler_max=session.doppler_max,
         doppler_step=session.doppler_step,
         integration_ms=session.integration_ms,
+        spread_acquisition_blocks=session.spread_acquisition_blocks,
+        acquisition_segment_count=session.acquisition_segment_count,
     )
     return acquire_signal(samples, config, progress_callback=progress_callback, log_callback=log_callback)
 
@@ -162,6 +244,8 @@ def scan_prns_from_session(
             doppler_max=session.doppler_max,
             doppler_step=session.doppler_step,
             integration_ms=session.integration_ms,
+            spread_acquisition_blocks=session.spread_acquisition_blocks,
+            acquisition_segment_count=session.acquisition_segment_count,
         )
 
         def nested_progress(local_progress: int, *, base=index) -> None:

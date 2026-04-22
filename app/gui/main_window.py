@@ -114,7 +114,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.navigation_tab.selection_changed.connect(self.set_selected_prn)
 
     def _load_default_file_if_present(self) -> None:
-        default_file = Path.cwd() / "test1.bin"
+        default_file = Path.cwd() / "test3min.bin"
+        if not default_file.exists():
+            default_file = Path.cwd() / "test1.bin"
         if default_file.exists():
             self.session_tab.set_file_path(str(default_file))
             self.append_log(f"Found default IQ file: {default_file}")
@@ -257,6 +259,9 @@ class MainWindow(QtWidgets.QMainWindow):
         config.doppler_min = self.acquisition_tab.doppler_min_spin.value()
         config.doppler_max = self.acquisition_tab.doppler_max_spin.value()
         config.doppler_step = self.acquisition_tab.doppler_step_spin.value()
+        config.integration_ms = self.acquisition_tab.integration_spin.value()
+        config.spread_acquisition_blocks = self.acquisition_tab.spread_blocks_checkbox.isChecked()
+        config.acquisition_segment_count = self.acquisition_tab.segment_count_spin.value()
         self.session = config
 
     def load_file_dialog(self) -> None:
@@ -384,6 +389,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_session_from_ui()
         samples_per_ms = int(round(self.session.sample_rate * 1e-3))
         count = max(samples_per_ms, samples_per_ms * int(self.session.integration_ms))
+        if self.session_tab.preload_enabled() and (
+            self.session.spread_acquisition_blocks or self.session.acquisition_segment_count > 1
+        ):
+            return self.current_samples if self.current_samples.size else self.ensure_samples()
         window = self.current_window_samples()
         if window.size == 0:
             window = self.ensure_samples()
@@ -579,7 +588,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.sync_session_from_ui()
         self.session.prn = selected_prn
-        samples = self.ensure_samples()
+        source_samples = self.ensure_samples()
+        start_offset = int(acquisition.best_candidate.segment_start_sample)
+        samples = source_samples[start_offset:] if start_offset < source_samples.size else source_samples
         if samples.size == 0:
             return
         worker = Worker(track_signal, samples, self.session, acquisition)
