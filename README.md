@@ -2,6 +2,14 @@
 
 An educational desktop tool for inspecting recorded GPS L1 C/A IQ data offline.
 
+## Critical Repo Sync Policy
+
+This repository treats shareable work as incomplete until it is committed and pushed through `origin` to both GitHub and GitLab.
+
+- Local edits alone are not a finished delivery.
+- If the work is ready to share, run tests, review `git status`, commit the intended files, and push.
+- If commit or push is intentionally skipped, that must be said explicitly.
+
 The project is built to make the decoding chain understandable end to end:
 
 - inspect a recorded IQ file without loading the whole capture blindly

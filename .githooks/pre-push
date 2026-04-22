@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -eu
+
+remote_name="${1:-}"
+
+if [ "$remote_name" = "origin" ]; then
+  push_count="$(git remote get-url --push --all origin | wc -l | tr -d ' ')"
+  if [ "${push_count}" -lt 2 ]; then
+    echo "ERROR: origin must have both GitHub and GitLab push URLs configured for this repository." >&2
+    echo "Run: powershell -ExecutionPolicy Bypass -File tools/install_git_hooks.ps1" >&2
+    exit 1
+  fi
+fi
+
+echo "pre-push: repository policy expects shareable work to be pushed through origin so GitHub and GitLab stay in sync." >&2

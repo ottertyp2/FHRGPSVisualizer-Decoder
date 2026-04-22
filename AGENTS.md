@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## CRITICAL delivery rule
+
+Do not treat "code changed locally" as finished work in this repository.
+
+- If a task is ready to share, you must carry it through `tests -> git status review -> commit -> push`.
+- The push must go through `origin` so the same branch/commit reaches both GitHub and GitLab.
+- Never silently stop after local edits or tests while claiming the work is delivered.
+- If you intentionally do not commit or do not push, say that explicitly and explain why.
+
 ## Mandatory startup and finish checklist
 
 Every agent instance working in this repository must do these checks explicitly:
