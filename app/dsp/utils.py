@@ -7,6 +7,9 @@ from typing import Iterable
 
 import numpy as np
 
+from app.dsp.compute import get_cupy_module, parallel_ordered_map, resolve_compute_plan
+from app.models import SessionConfig
+
 
 TOOLTIPS: dict[str, str] = {
     "ca_code": "The C/A code is the 1023-chip spreading code that identifies one GPS satellite PRN.",
@@ -50,12 +53,62 @@ def get_window(window_name: str, length: int) -> np.ndarray:
     return np.ones(length, dtype=float)
 
 
+def _segment_power_db(segment: np.ndarray, fft_size: int) -> np.ndarray:
+    """Return one FFT power row in dB."""
+
+    fft_values = np.fft.fftshift(np.fft.fft(segment, n=fft_size))
+    return 20.0 * np.log10(np.abs(fft_values) + 1e-12)
+
+
+def _compute_power_rows(
+    segments: list[np.ndarray],
+    fft_size: int,
+    session: SessionConfig | None,
+) -> tuple[np.ndarray, str]:
+    """Return FFT power rows plus the backend that produced them."""
+
+    if not segments:
+        return np.empty((0, fft_size)), "cpu"
+
+    requested_backend = session.compute_backend if session is not None else "auto"
+    requested_workers = session.max_workers if session is not None else 0
+    gpu_enabled = session.gpu_enabled if session is not None else True
+    plan = resolve_compute_plan(
+        requested_backend,
+        requested_workers,
+        gpu_enabled=gpu_enabled,
+        max_tasks=len(segments),
+        prefer_gpu=True,
+    )
+
+    if plan.active_backend == "gpu":
+        cupy = get_cupy_module()
+        if cupy is not None:
+            gpu_segments = cupy.asarray(np.asarray(segments, dtype=np.complex64))
+            fft_values = cupy.fft.fft(gpu_segments, n=fft_size, axis=1)
+            shifted = cupy.fft.fftshift(fft_values, axes=1)
+            power = 20.0 * cupy.log10(cupy.abs(shifted) + 1e-12)
+            return np.asarray(cupy.asnumpy(power)), "gpu"
+
+    cpu_workers = min(plan.selected_workers, len(segments))
+    if cpu_workers <= 1:
+        rows = [_segment_power_db(segment, fft_size) for segment in segments]
+    else:
+        rows = parallel_ordered_map(
+            segments,
+            lambda _index, segment: _segment_power_db(segment, fft_size),
+            max_workers=cpu_workers,
+        )
+    return np.vstack(rows), "cpu"
+
+
 def compute_spectrum(
     samples: np.ndarray,
     sample_rate: float,
     fft_size: int = 4096,
     window_name: str = "hann",
     average_count: int = 1,
+    session: SessionConfig | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute a simple averaged power spectrum."""
 
@@ -66,21 +119,19 @@ def compute_spectrum(
     average_count = max(1, int(average_count))
     hop = fft_size
     window = get_window(window_name, fft_size)
-    spectra: list[np.ndarray] = []
+    segments: list[np.ndarray] = []
     for idx in range(average_count):
         start = idx * hop
         stop = start + fft_size
         if stop > samples.size:
             break
-        segment = samples[start:stop] * window
-        fft_values = np.fft.fftshift(np.fft.fft(segment, n=fft_size))
-        power_db = 20.0 * np.log10(np.abs(fft_values) + 1e-12)
-        spectra.append(power_db)
+        segments.append(samples[start:stop] * window)
 
-    if not spectra:
-        spectra.append(20.0 * np.log10(np.abs(np.fft.fftshift(np.fft.fft(samples[:fft_size] * window))) + 1e-12))
+    if not segments:
+        segments.append(samples[:fft_size] * window)
 
-    spectrum = np.mean(np.vstack(spectra), axis=0)
+    spectra, _backend = _compute_power_rows(segments, fft_size, session)
+    spectrum = np.mean(spectra, axis=0)
     freqs = np.fft.fftshift(np.fft.fftfreq(fft_size, d=1.0 / sample_rate))
     return freqs, spectrum
 
@@ -92,6 +143,7 @@ def compute_waterfall(
     step: int | None = None,
     window_name: str = "hann",
     max_rows: int = 200,
+    session: SessionConfig | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build a compact waterfall image."""
 
@@ -102,25 +154,24 @@ def compute_waterfall(
     step = step or fft_size // 2
     step = max(1, step)
     window = get_window(window_name, fft_size)
-    rows: list[np.ndarray] = []
+    segments: list[np.ndarray] = []
     times: list[float] = []
     for start in range(0, max(samples.size - fft_size, 1), step):
         stop = start + fft_size
         if stop > samples.size:
             break
-        segment = samples[start:stop] * window
-        fft_values = np.fft.fftshift(np.fft.fft(segment))
-        rows.append(20.0 * np.log10(np.abs(fft_values) + 1e-12))
+        segments.append(samples[start:stop] * window)
         times.append(start / sample_rate)
-        if len(rows) >= max_rows:
+        if len(segments) >= max_rows:
             break
 
-    if not rows:
-        rows.append(np.zeros(fft_size))
+    if not segments:
+        segments.append(np.zeros(fft_size, dtype=np.complex64))
         times.append(0.0)
 
+    rows, _backend = _compute_power_rows(segments, fft_size, session)
     freqs = np.fft.fftshift(np.fft.fftfreq(fft_size, d=1.0 / sample_rate))
-    return freqs, np.asarray(times), np.vstack(rows)
+    return freqs, np.asarray(times), rows
 
 
 def bits_to_str(bits: Iterable[int | bool]) -> str:

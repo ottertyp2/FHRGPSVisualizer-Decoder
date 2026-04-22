@@ -21,6 +21,9 @@ class SessionConfig:
     is_baseband: bool = True
     if_frequency_hz: float = 0.0
     data_type: str = "complex64_le"
+    compute_backend: str = "auto"
+    max_workers: int = 0
+    gpu_enabled: bool = True
     start_sample: int = 0
     sample_count: int = DEFAULT_WINDOW_SAMPLES
     prn: int = 1

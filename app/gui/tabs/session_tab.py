@@ -6,6 +6,7 @@ import numpy as np
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
+from app.dsp.compute import detect_logical_cores
 from app.dsp.utils import TOOLTIPS
 from app.models import DEFAULT_SAMPLE_RATE_HZ, DEFAULT_WINDOW_SAMPLES, FileMetadata, SessionConfig
 
@@ -75,12 +76,35 @@ class SessionTab(QtWidgets.QWidget):
             "If enabled, the tool loads the complete selected IQ source into RAM before analysis. "
             "If disabled, only the active analysis window is loaded on demand."
         )
+        logical_cores = detect_logical_cores()
+        self.compute_backend_combo = QtWidgets.QComboBox()
+        self.compute_backend_combo.addItem("Auto", "auto")
+        self.compute_backend_combo.addItem("CPU", "cpu")
+        self.compute_backend_combo.addItem("GPU", "gpu")
+        self.compute_backend_combo.setToolTip(
+            "Auto prefers an available optional GPU backend for FFT-heavy work and otherwise uses the CPU."
+        )
+        self.worker_spin = QtWidgets.QSpinBox()
+        self.worker_spin.setRange(0, logical_cores)
+        self.worker_spin.setValue(0)
+        self.worker_spin.setSpecialValueText("Auto")
+        self.worker_spin.setToolTip(
+            "Maximum internal CPU workers. Auto uses all logical cores minus one and caps to the task count."
+        )
+        self.gpu_checkbox = QtWidgets.QCheckBox("Allow optional GPU backend")
+        self.gpu_checkbox.setChecked(True)
+        self.gpu_checkbox.setToolTip(
+            "If enabled, the app may use an optional CuPy/CUDA backend when available."
+        )
 
         form.addRow("File", self.file_edit)
         form.addRow("Sample rate", self.sample_rate_spin)
         form.addRow("Center frequency", self.center_frequency_spin)
         form.addRow("Signal mode", self.baseband_checkbox)
         form.addRow("IF / search center", self.if_frequency_spin)
+        form.addRow("Compute backend", self.compute_backend_combo)
+        form.addRow("CPU workers", self.worker_spin)
+        form.addRow("GPU use", self.gpu_checkbox)
         form.addRow("Start sample", self.start_sample_spin)
         form.addRow("Window samples", self.sample_count_spin)
         form.addRow("RAM preload", self.preload_checkbox)
@@ -120,6 +144,10 @@ class SessionTab(QtWidgets.QWidget):
         self.ram_status_label.setWordWrap(True)
         layout.addWidget(self.ram_status_label)
 
+        self.compute_status_label = QtWidgets.QLabel("Runtime status: detecting hardware.")
+        self.compute_status_label.setWordWrap(True)
+        layout.addWidget(self.compute_status_label)
+
         self.progress_bar = QtWidgets.QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -147,6 +175,9 @@ class SessionTab(QtWidgets.QWidget):
 
         self.sample_rate_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.if_frequency_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.compute_backend_combo.currentIndexChanged.connect(lambda *_: self.settings_changed.emit())
+        self.worker_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.gpu_checkbox.toggled.connect(lambda *_: self.settings_changed.emit())
         self.start_sample_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.sample_count_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.preload_checkbox.toggled.connect(lambda *_: self.settings_changed.emit())
@@ -171,6 +202,11 @@ class SessionTab(QtWidgets.QWidget):
 
         self.ram_status_label.setText(text)
 
+    def set_compute_status(self, text: str) -> None:
+        """Show compute backend and hardware status."""
+
+        self.compute_status_label.setText(text)
+
     def get_session_config(self) -> SessionConfig:
         """Build a session config from the current UI state."""
 
@@ -180,6 +216,9 @@ class SessionTab(QtWidgets.QWidget):
             center_frequency=float(self.center_frequency_spin.value()),
             is_baseband=self.baseband_checkbox.isChecked(),
             if_frequency_hz=float(self.if_frequency_spin.value()),
+            compute_backend=str(self.compute_backend_combo.currentData()),
+            max_workers=int(self.worker_spin.value()),
+            gpu_enabled=self.gpu_checkbox.isChecked(),
             start_sample=int(self.start_sample_spin.value()),
             sample_count=int(self.sample_count_spin.value()),
         )

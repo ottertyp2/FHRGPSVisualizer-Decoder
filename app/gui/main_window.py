@@ -18,6 +18,7 @@ from app.dsp.acquisition import survey_sample_rates
 from app.dsp.acquisition import sweep_search_centers_from_session
 from app.dsp.benchmark import run_benchmark
 from app.dsp.bitsync import extract_navigation_bits
+from app.dsp.compute import resolve_compute_plan
 from app.dsp.demo import generate_demo_signal
 from app.dsp.io import (
     COMMON_GNSS_SAMPLE_RATES,
@@ -176,6 +177,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_ram_status(self) -> None:
         """Refresh the RAM status label in the session tab."""
 
+        self.sync_session_from_ui()
         total_ram, avail_ram = self._memory_status()
         planned = self._planned_ram_bytes()
         mode = "full source preload" if self.session_tab.preload_enabled() else "selected window only"
@@ -183,9 +185,15 @@ class MainWindow(QtWidgets.QMainWindow):
         total_text = f"{total_ram / (1024 ** 3):.1f} GiB" if total_ram else "unknown"
         avail_text = f"{avail_ram / (1024 ** 3):.1f} GiB" if avail_ram else "unknown"
         planned_text = f"{planned / (1024 ** 2):.1f} MiB"
+        compute_plan = resolve_compute_plan(
+            self.session.compute_backend,
+            self.session.max_workers,
+            gpu_enabled=self.session.gpu_enabled,
+        )
         self.session_tab.set_ram_status(
             f"RAM status: mode={mode}, signal={signal_mode}, planned load={planned_text}, available RAM={avail_text}, total RAM={total_text}."
         )
+        self.session_tab.set_compute_status(compute_plan.status_text())
 
     def _confirm_large_ram_load(self, bytes_to_load: int) -> bool:
         """Warn before very large RAM loads."""

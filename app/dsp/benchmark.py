@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 from dataclasses import replace
-import multiprocessing
 import platform
 import time
 from pathlib import Path
@@ -12,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from app.dsp.acquisition import acquisition_from_session
+from app.dsp.compute import get_cupy_module, parallel_ordered_map, resolve_compute_plan
 from app.dsp.demo import generate_demo_signal
 from app.dsp.io import Complex64FileSource
 from app.dsp.tracking import track_file, track_signal
@@ -51,13 +51,59 @@ def _system_info() -> dict[str, str]:
     """Collect lightweight system information."""
 
     total_mem = _get_total_memory_bytes()
+    compute_plan = resolve_compute_plan()
     return {
         "platform": platform.platform(),
         "cpu": platform.processor() or platform.machine(),
-        "logical_cores": str(multiprocessing.cpu_count()),
+        "logical_cores": str(compute_plan.logical_cores),
+        "selected_workers": str(compute_plan.selected_workers),
+        "active_backend": compute_plan.active_backend,
+        "gpu_available": str(compute_plan.gpu_available).lower(),
+        "gpu_name": compute_plan.gpu_name if compute_plan.gpu_available else "not detected",
         "python": platform.python_version(),
         "ram_gib": f"{total_mem / (1024 ** 3):.1f}" if total_mem else "unknown",
     }
+
+
+def _benchmark_fft_core(
+    fft_samples: np.ndarray,
+    fft_size: int,
+    fft_iterations: int,
+    session: SessionConfig,
+) -> tuple[int, str, int]:
+    """Run one FFT benchmark using the resolved compute backend."""
+
+    plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        max_tasks=fft_iterations,
+        prefer_gpu=True,
+    )
+
+    if plan.active_backend == "gpu":
+        cupy = get_cupy_module()
+        if cupy is not None:
+            gpu_samples = cupy.asarray(fft_samples)
+            for idx in range(fft_iterations):
+                offset = (idx * fft_size) % max(fft_samples.size - fft_size + 1, 1)
+                segment = gpu_samples[offset : offset + fft_size]
+                _ = cupy.fft.fft(segment)
+            cupy.cuda.Stream.null.synchronize()
+            return int(fft_iterations * fft_size), "gpu", plan.selected_workers
+
+    def run_one(index: int, _item: int) -> int:
+        offset = (index * fft_size) % max(fft_samples.size - fft_size + 1, 1)
+        segment = fft_samples[offset : offset + fft_size]
+        _ = np.fft.fft(segment)
+        return int(segment.size)
+
+    processed = parallel_ordered_map(
+        list(range(fft_iterations)),
+        run_one,
+        max_workers=plan.selected_workers,
+    )
+    return int(sum(processed)), "cpu", plan.selected_workers
 
 
 def _component_result(
@@ -100,6 +146,12 @@ def run_benchmark(
     current_rate = float(session.sample_rate)
     target_rate = current_rate
     target_rate_label = f"{target_rate / 1e6:.3f} MSa/s"
+    compute_plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        prefer_gpu=True,
+    )
     samples_per_ms = int(round(current_rate * 1e-3))
     benchmark_ms = 200
     compute_samples = max(samples_per_ms * benchmark_ms, samples_per_ms * 40)
@@ -128,6 +180,11 @@ def run_benchmark(
             log_callback(message)
 
     log("Benchmark started. Measuring I/O and DSP throughput.")
+    log(
+        f"Benchmark runtime: backend {compute_plan.active_backend}, "
+        f"workers {compute_plan.selected_workers}/{compute_plan.logical_cores}, "
+        f"GPU {compute_plan.gpu_name if compute_plan.gpu_available else 'unavailable'}."
+    )
     if progress_callback:
         progress_callback(5)
 
@@ -195,12 +252,7 @@ def run_benchmark(
     fft_size = 4096 if fft_samples.size >= 4096 else max(256, int(2 ** np.floor(np.log2(max(fft_samples.size, 256)))))
     fft_iterations = max(8, min(64, fft_samples.size // max(fft_size, 1)))
     start = time.perf_counter()
-    fft_processed = 0
-    for idx in range(fft_iterations):
-        offset = (idx * fft_size) % max(fft_samples.size - fft_size + 1, 1)
-        segment = fft_samples[offset : offset + fft_size]
-        _ = np.fft.fft(segment)
-        fft_processed += int(segment.size)
+    fft_processed, fft_backend, fft_workers = _benchmark_fft_core(fft_samples, fft_size, fft_iterations, session)
     elapsed = time.perf_counter() - start
     components.append(
         _component_result(
@@ -210,7 +262,7 @@ def run_benchmark(
             fft_processed * BYTES_PER_COMPLEX64_SAMPLE,
             current_rate,
             target_rate,
-            f"{fft_iterations} x {fft_size}-point FFTs for spectrum and waterfall style work.",
+            f"{fft_iterations} x {fft_size}-point FFTs using {fft_backend} backend with {fft_workers} worker(s).",
         )
     )
     log(f"FFT core: {components[-1].throughput_samples_s / 1e6:.2f} MSa/s equivalent.")
@@ -312,5 +364,11 @@ def run_benchmark(
         components=components,
         bottleneck_name=bottleneck.name if bottleneck else "",
         suitability_summary=suitability,
-        system_info=_system_info(),
+        system_info={
+            **_system_info(),
+            "selected_workers": str(compute_plan.selected_workers),
+            "active_backend": compute_plan.active_backend,
+            "gpu_available": str(compute_plan.gpu_available).lower(),
+            "gpu_name": compute_plan.gpu_name if compute_plan.gpu_available else "not detected",
+        },
     )

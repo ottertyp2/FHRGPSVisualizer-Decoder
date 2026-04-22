@@ -6,6 +6,12 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from app.dsp.compute import (
+    ProgressTracker,
+    get_cupy_module,
+    parallel_ordered_map,
+    resolve_compute_plan,
+)
 from app.dsp.gps_ca import sample_ca_code
 from app.models import (
     AcquisitionCandidate,
@@ -34,6 +40,9 @@ class AcquisitionConfig:
     integration_ms: int = 4
     spread_acquisition_blocks: bool = True
     acquisition_segment_count: int = 1
+    compute_backend: str = "auto"
+    max_workers: int = 0
+    gpu_enabled: bool = True
 
 
 def _select_ms_blocks(
@@ -139,6 +148,147 @@ def acquisition_rank_key(result: AcquisitionResult) -> tuple[float, ...]:
     )
 
 
+def _segment_blocks_for_start(
+    samples: np.ndarray,
+    sample_rate: float,
+    config: AcquisitionConfig,
+    segment_start_ms: int,
+) -> np.ndarray:
+    """Return normalized 1 ms acquisition blocks for one segment start."""
+
+    samples_per_ms = int(round(sample_rate * 1e-3))
+    segment_start = int(segment_start_ms) * samples_per_ms
+    if config.acquisition_segment_count > 1:
+        segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
+        segment_samples = np.asarray(samples[segment_start:segment_stop], dtype=np.complex64)
+        spread_blocks = False
+    else:
+        segment_samples = np.asarray(samples[segment_start:], dtype=np.complex64)
+        spread_blocks = bool(config.spread_acquisition_blocks)
+
+    if segment_samples.size:
+        segment_samples = segment_samples - np.mean(segment_samples)
+    return _select_ms_blocks(
+        segment_samples,
+        sample_rate,
+        block_count=max(1, int(config.integration_ms)),
+        spread_blocks=spread_blocks,
+    )
+
+
+def _compute_heatmap_row(
+    doppler: float,
+    selected_blocks: np.ndarray,
+    search_center_hz: float,
+    time_vector: np.ndarray,
+    code_fft: np.ndarray,
+) -> np.ndarray:
+    """Return one Doppler row of the acquisition heatmap."""
+
+    search_frequency_hz = search_center_hz + float(doppler)
+    metrics = np.zeros(selected_blocks.shape[1], dtype=np.float64)
+    for block in selected_blocks:
+        wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
+        correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
+        metrics += np.abs(correlation) ** 2
+    return metrics.astype(np.float32)
+
+
+def _build_heatmap_cpu(
+    selected_blocks: np.ndarray,
+    doppler_bins: np.ndarray,
+    search_center_hz: float,
+    time_vector: np.ndarray,
+    code_fft: np.ndarray,
+    worker_count: int,
+) -> np.ndarray:
+    """Build the acquisition heatmap on the CPU."""
+
+    effective_workers = min(max(1, int(worker_count)), int(doppler_bins.size))
+    rows = parallel_ordered_map(
+        list(doppler_bins),
+        lambda _index, doppler: _compute_heatmap_row(
+            float(doppler),
+            selected_blocks,
+            search_center_hz,
+            time_vector,
+            code_fft,
+        ),
+        max_workers=effective_workers,
+    )
+    return np.vstack(rows).astype(np.float32, copy=False)
+
+
+def _build_heatmap_gpu(
+    selected_blocks: np.ndarray,
+    doppler_bins: np.ndarray,
+    search_center_hz: float,
+    time_vector: np.ndarray,
+    code_fft: np.ndarray,
+) -> np.ndarray:
+    """Build the acquisition heatmap on an optional CuPy backend."""
+
+    cupy = get_cupy_module()
+    if cupy is None:
+        return _build_heatmap_cpu(selected_blocks, doppler_bins, search_center_hz, time_vector, code_fft, 1)
+
+    gpu_blocks = cupy.asarray(selected_blocks)
+    gpu_time = cupy.asarray(time_vector)
+    gpu_code_fft = cupy.asarray(code_fft)
+    heatmap = cupy.zeros((doppler_bins.size, selected_blocks.shape[1]), dtype=cupy.float32)
+    for row, doppler in enumerate(doppler_bins):
+        search_frequency_hz = search_center_hz + float(doppler)
+        carrier = cupy.exp(-1j * 2.0 * cupy.pi * search_frequency_hz * gpu_time)
+        wiped = gpu_blocks * carrier[None, :]
+        correlation = cupy.fft.ifft(cupy.fft.fft(wiped, axis=1) * gpu_code_fft[None, :], axis=1)
+        metrics = cupy.sum(cupy.abs(correlation) ** 2, axis=0)
+        heatmap[row, :] = metrics.astype(cupy.float32)
+    cupy.cuda.Stream.null.synchronize()
+    return np.asarray(cupy.asnumpy(heatmap), dtype=np.float32)
+
+
+def _build_heatmap(
+    selected_blocks: np.ndarray,
+    doppler_bins: np.ndarray,
+    config: AcquisitionConfig,
+    time_vector: np.ndarray,
+    code_fft: np.ndarray,
+) -> tuple[np.ndarray, str, int]:
+    """Build one heatmap and report the active backend and worker count."""
+
+    plan = resolve_compute_plan(
+        config.compute_backend,
+        config.max_workers,
+        gpu_enabled=config.gpu_enabled,
+        max_tasks=int(doppler_bins.size),
+        prefer_gpu=True,
+    )
+    if plan.active_backend == "gpu":
+        return (
+            _build_heatmap_gpu(
+                selected_blocks,
+                doppler_bins,
+                config.search_center_hz,
+                time_vector,
+                code_fft,
+            ),
+            "gpu",
+            plan.selected_workers,
+        )
+    return (
+        _build_heatmap_cpu(
+            selected_blocks,
+            doppler_bins,
+            config.search_center_hz,
+            time_vector,
+            code_fft,
+            plan.selected_workers,
+        ),
+        "cpu",
+        plan.selected_workers,
+    )
+
+
 def acquire_signal(
     samples: np.ndarray,
     config: AcquisitionConfig,
@@ -161,6 +311,13 @@ def acquire_signal(
     code_fft = np.conj(np.fft.fft(local_code))
     doppler_bins = np.arange(config.doppler_min, config.doppler_max + config.doppler_step, config.doppler_step)
     time_vector = np.arange(samples_per_ms, dtype=np.float64) / sample_rate
+    segment_plan = resolve_compute_plan(
+        config.compute_backend,
+        config.max_workers,
+        gpu_enabled=config.gpu_enabled,
+        max_tasks=int(doppler_bins.size),
+        prefer_gpu=True,
+    )
 
     best_heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
     best_metric = -np.inf
@@ -170,40 +327,26 @@ def acquire_signal(
     best_usable = 0
     segment_candidates: list[AcquisitionCandidate] = []
 
-    for segment_index, segment_start_ms in enumerate(segment_starts_ms):
-        segment_start = int(segment_start_ms) * samples_per_ms
-        if config.acquisition_segment_count > 1:
-            segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
-            segment_samples = np.asarray(samples[segment_start:segment_stop], dtype=np.complex64)
-            segment_spread = False
-        else:
-            segment_samples = np.asarray(samples[segment_start:], dtype=np.complex64)
-            segment_spread = bool(config.spread_acquisition_blocks)
-
-        if segment_samples.size:
-            segment_samples = segment_samples - np.mean(segment_samples)
-
-        selected_blocks = _select_ms_blocks(
-            segment_samples,
-            sample_rate,
-            block_count=max(1, int(config.integration_ms)),
-            spread_blocks=segment_spread,
+    if log_callback:
+        gpu_text = segment_plan.gpu_name if segment_plan.gpu_available else "unavailable"
+        log_callback(
+            f"Acquisition PRN {config.prn}: backend {segment_plan.active_backend}, "
+            f"workers {segment_plan.selected_workers}/{segment_plan.logical_cores}, GPU {gpu_text}."
         )
+
+    for segment_index, segment_start_ms in enumerate(segment_starts_ms):
+        selected_blocks = _segment_blocks_for_start(samples, sample_rate, config, int(segment_start_ms))
         usable = int(selected_blocks.shape[0])
         if usable == 0:
             continue
 
-        heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
-        for row, doppler in enumerate(doppler_bins):
-            search_frequency_hz = config.search_center_hz + float(doppler)
-            metrics = np.zeros(samples_per_ms, dtype=np.float64)
-            for block_index in range(usable):
-                block = selected_blocks[block_index]
-                wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
-                correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
-                metrics += np.abs(correlation) ** 2
-            heatmap[row, :] = metrics.astype(np.float32)
-
+        heatmap, _backend, _workers = _build_heatmap(
+            selected_blocks,
+            doppler_bins,
+            config,
+            time_vector,
+            code_fft,
+        )
         flat = heatmap.ravel()
         flat_index = int(np.argmax(flat))
         row, col = np.unravel_index(flat_index, heatmap.shape)
@@ -250,40 +393,17 @@ def acquire_signal(
     if dominant_cluster:
         dominant_cluster = sorted(dominant_cluster, key=lambda candidate: candidate.metric, reverse=True)
         best = dominant_cluster[0]
-        dominant_segment_start = best.segment_start_sample // samples_per_ms
-        best_segment_start_ms = int(dominant_segment_start)
-        for segment_index, segment_start_ms in enumerate(segment_starts_ms):
-            if int(segment_start_ms) == dominant_segment_start:
-                # The heatmap should reflect the segment used for the chosen best candidate.
-                segment_start = int(segment_start_ms) * samples_per_ms
-                if config.acquisition_segment_count > 1:
-                    segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
-                    segment_samples = np.asarray(samples[segment_start:segment_stop], dtype=np.complex64)
-                    segment_spread = False
-                else:
-                    segment_samples = np.asarray(samples[segment_start:], dtype=np.complex64)
-                    segment_spread = bool(config.spread_acquisition_blocks)
-                if segment_samples.size:
-                    segment_samples = segment_samples - np.mean(segment_samples)
-                selected_blocks = _select_ms_blocks(
-                    segment_samples,
-                    sample_rate,
-                    block_count=max(1, int(config.integration_ms)),
-                    spread_blocks=segment_spread,
-                )
-                if selected_blocks.size:
-                    cluster_heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
-                    for row, doppler in enumerate(doppler_bins):
-                        search_frequency_hz = config.search_center_hz + float(doppler)
-                        metrics = np.zeros(samples_per_ms, dtype=np.float64)
-                        for block_index in range(int(selected_blocks.shape[0])):
-                            block = selected_blocks[block_index]
-                            wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
-                            correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
-                            metrics += np.abs(correlation) ** 2
-                        cluster_heatmap[row, :] = metrics.astype(np.float32)
-                    heatmap = cluster_heatmap
-                break
+        best_segment_start_ms = int(best.segment_start_sample // samples_per_ms)
+        selected_blocks = _segment_blocks_for_start(samples, sample_rate, config, best_segment_start_ms)
+        if selected_blocks.size:
+            best_usable = int(selected_blocks.shape[0])
+            heatmap, _backend, _workers = _build_heatmap(
+                selected_blocks,
+                doppler_bins,
+                config,
+                time_vector,
+                code_fft,
+            )
 
     flat = heatmap.ravel()
     top_indices = np.argsort(flat)[-8:][::-1]
@@ -350,6 +470,9 @@ def acquisition_from_session(
         integration_ms=session.integration_ms,
         spread_acquisition_blocks=session.spread_acquisition_blocks,
         acquisition_segment_count=session.acquisition_segment_count,
+        compute_backend=session.compute_backend,
+        max_workers=session.max_workers,
+        gpu_enabled=session.gpu_enabled,
     )
     return acquire_signal(samples, config, progress_callback=progress_callback, log_callback=log_callback)
 
@@ -364,29 +487,52 @@ def scan_prns_from_session(
     """Run acquisition for multiple PRNs and return the per-satellite results."""
 
     prn_list = prns or list(range(1, 33))
-    results: list[AcquisitionResult] = []
     total = max(len(prn_list), 1)
+    outer_plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        max_tasks=total,
+        prefer_gpu=True,
+    )
+    parallel_outer = outer_plan.active_backend == "cpu" and outer_plan.selected_workers > 1 and total > 1
+    results: list[AcquisitionResult] = []
 
-    for index, prn in enumerate(prn_list):
-        config = AcquisitionConfig(
-            sample_rate=session.sample_rate,
-            prn=prn,
-            search_center_hz=0.0 if session.is_baseband else session.if_frequency_hz,
-            doppler_min=session.doppler_min,
-            doppler_max=session.doppler_max,
-            doppler_step=session.doppler_step,
-            integration_ms=session.integration_ms,
-            spread_acquisition_blocks=session.spread_acquisition_blocks,
-            acquisition_segment_count=session.acquisition_segment_count,
+    if log_callback:
+        gpu_text = outer_plan.gpu_name if outer_plan.gpu_available else "unavailable"
+        log_callback(
+            f"PRN scan: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, GPU {gpu_text}."
         )
 
-        def nested_progress(local_progress: int, *, base=index) -> None:
-            if progress_callback:
-                combined = int(((base + local_progress / 100.0) / total) * 100)
-                progress_callback(combined)
+    if parallel_outer:
+        tracker = ProgressTracker(total, progress_callback)
+        worker_session = replace(session, compute_backend="cpu", max_workers=1, gpu_enabled=False)
 
-        result = acquire_signal(samples, config, progress_callback=nested_progress, log_callback=log_callback)
-        results.append(result)
+        def run_one(index: int, prn: int) -> AcquisitionResult:
+            local_session = replace(worker_session, prn=prn)
+            return acquisition_from_session(
+                samples,
+                local_session,
+                progress_callback=lambda value, idx=index: tracker.update(idx, value),
+                log_callback=log_callback,
+            )
+
+        results = parallel_ordered_map(
+            prn_list,
+            run_one,
+            max_workers=outer_plan.selected_workers,
+        )
+    else:
+        for index, prn in enumerate(prn_list):
+            local_session = replace(session, prn=prn)
+
+            def nested_progress(local_progress: int, *, base=index) -> None:
+                if progress_callback:
+                    combined = int(((base + local_progress / 100.0) / total) * 100)
+                    progress_callback(combined)
+
+            result = acquisition_from_session(samples, local_session, progress_callback=nested_progress, log_callback=log_callback)
+            results.append(result)
 
     results.sort(
         key=acquisition_rank_key,
@@ -408,33 +554,76 @@ def sweep_search_centers_from_session(
     """Sweep several IF / search-center hypotheses and rank the best one."""
 
     centers = search_centers_hz or [0.0]
-    entries: list[SearchCenterSweepEntry] = []
     total = max(len(centers), 1)
+    entries: list[SearchCenterSweepEntry] = []
+    outer_plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        max_tasks=total,
+        prefer_gpu=True,
+    )
+    parallel_outer = outer_plan.active_backend == "cpu" and outer_plan.selected_workers > 1 and total > 1
 
-    for center_index, center_hz in enumerate(centers):
-        local_session = replace(session)
-        local_session.is_baseband = abs(center_hz) < 1e-9
-        local_session.if_frequency_hz = float(center_hz)
-
-        def nested_progress(local_progress: int, *, base=center_index) -> None:
-            if progress_callback:
-                combined = int(((base + local_progress / 100.0) / total) * 100)
-                progress_callback(combined)
-
-        results = scan_prns_from_session(
-            samples,
-            local_session,
-            prns=prns,
-            progress_callback=nested_progress,
-            log_callback=None,
+    if log_callback:
+        gpu_text = outer_plan.gpu_name if outer_plan.gpu_available else "unavailable"
+        log_callback(
+            f"Search-center sweep: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, GPU {gpu_text}."
         )
-        best = results[0]
-        entries.append(SearchCenterSweepEntry(search_center_hz=float(center_hz), best_result=best))
-        if log_callback:
-            log_callback(
-                f"Search-center sweep {center_hz:.1f} Hz: best PRN {best.prn}, "
-                f"metric {best.best_candidate.metric:.2f}, search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+
+    if parallel_outer:
+        tracker = ProgressTracker(total, progress_callback)
+        worker_session = replace(session, compute_backend="cpu", max_workers=1, gpu_enabled=False)
+
+        def run_one(index: int, center_hz: float) -> SearchCenterSweepEntry:
+            local_session = replace(worker_session)
+            local_session.is_baseband = abs(center_hz) < 1e-9
+            local_session.if_frequency_hz = float(center_hz)
+            results = scan_prns_from_session(
+                samples,
+                local_session,
+                prns=prns,
+                progress_callback=lambda value, idx=index: tracker.update(idx, value),
+                log_callback=None,
             )
+            best = results[0]
+            if log_callback:
+                log_callback(
+                    f"Search-center sweep {center_hz:.1f} Hz: best PRN {best.prn}, "
+                    f"metric {best.best_candidate.metric:.2f}, search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+                )
+            return SearchCenterSweepEntry(search_center_hz=float(center_hz), best_result=best)
+
+        entries = parallel_ordered_map(
+            centers,
+            run_one,
+            max_workers=outer_plan.selected_workers,
+        )
+    else:
+        for center_index, center_hz in enumerate(centers):
+            local_session = replace(session)
+            local_session.is_baseband = abs(center_hz) < 1e-9
+            local_session.if_frequency_hz = float(center_hz)
+
+            def nested_progress(local_progress: int, *, base=center_index) -> None:
+                if progress_callback:
+                    combined = int(((base + local_progress / 100.0) / total) * 100)
+                    progress_callback(combined)
+
+            results = scan_prns_from_session(
+                samples,
+                local_session,
+                prns=prns,
+                progress_callback=nested_progress,
+                log_callback=None,
+            )
+            best = results[0]
+            entries.append(SearchCenterSweepEntry(search_center_hz=float(center_hz), best_result=best))
+            if log_callback:
+                log_callback(
+                    f"Search-center sweep {center_hz:.1f} Hz: best PRN {best.prn}, "
+                    f"metric {best.best_candidate.metric:.2f}, search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+                )
 
     entries.sort(
         key=lambda item: acquisition_rank_key(item.best_result),
@@ -456,46 +645,96 @@ def survey_sample_rates(
     """Rank several sample-rate hypotheses for one recording."""
 
     rates = sample_rates_hz or [session.sample_rate]
-    entries: list[SampleRateSurveyEntry] = []
     total = max(len(rates), 1)
+    entries: list[SampleRateSurveyEntry] = []
     prn_list = prns or list(range(1, 33))
+    outer_plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        max_tasks=total,
+        prefer_gpu=True,
+    )
+    parallel_outer = outer_plan.active_backend == "cpu" and outer_plan.selected_workers > 1 and total > 1
 
-    for rate_index, sample_rate_hz in enumerate(rates):
-        local_session = replace(session)
-        local_session.sample_rate = float(sample_rate_hz)
-        local_session.doppler_min = min(int(session.doppler_min), -20_000)
-        local_session.doppler_max = max(int(session.doppler_max), 20_000)
-        local_session.doppler_step = max(int(session.doppler_step), 500)
-        local_session.integration_ms = min(max(int(session.integration_ms), 20), 80)
-        local_session.acquisition_segment_count = max(int(session.acquisition_segment_count), 6)
-        local_session.spread_acquisition_blocks = False
-
-        def nested_progress(local_progress: int, *, base=rate_index) -> None:
-            if progress_callback:
-                combined = int(((base + local_progress / 100.0) / total) * 100)
-                progress_callback(combined)
-
-        results = scan_prns_from_session(
-            samples,
-            local_session,
-            prns=prn_list,
-            progress_callback=nested_progress,
-            log_callback=None,
+    if log_callback:
+        gpu_text = outer_plan.gpu_name if outer_plan.gpu_available else "unavailable"
+        log_callback(
+            f"Sample-rate survey: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, GPU {gpu_text}."
         )
-        best = results[0]
-        entries.append(
-            SampleRateSurveyEntry(
+
+    def build_local_session(base_session: SessionConfig, sample_rate_hz: float) -> SessionConfig:
+        local_session = replace(base_session)
+        local_session.sample_rate = float(sample_rate_hz)
+        local_session.doppler_min = min(int(base_session.doppler_min), -20_000)
+        local_session.doppler_max = max(int(base_session.doppler_max), 20_000)
+        local_session.doppler_step = max(int(base_session.doppler_step), 500)
+        local_session.integration_ms = min(max(int(base_session.integration_ms), 20), 80)
+        local_session.acquisition_segment_count = max(int(base_session.acquisition_segment_count), 6)
+        local_session.spread_acquisition_blocks = False
+        return local_session
+
+    if parallel_outer:
+        tracker = ProgressTracker(total, progress_callback)
+        worker_session = replace(session, compute_backend="cpu", max_workers=1, gpu_enabled=False)
+
+        def run_one(index: int, sample_rate_hz: float) -> SampleRateSurveyEntry:
+            local_session = build_local_session(worker_session, sample_rate_hz)
+            results = scan_prns_from_session(
+                samples,
+                local_session,
+                prns=prn_list,
+                progress_callback=lambda value, idx=index: tracker.update(idx, value),
+                log_callback=None,
+            )
+            best = results[0]
+            if log_callback:
+                log_callback(
+                    f"Sample-rate survey {sample_rate_hz / 1e6:.3f} MSa/s: best PRN {best.prn}, "
+                    f"metric {best.best_candidate.metric:.2f}, consistent segments {best.consistent_segments}, "
+                    f"search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+                )
+            return SampleRateSurveyEntry(
                 sample_rate_hz=float(sample_rate_hz),
                 best_result=best,
                 all_results=results,
             )
+
+        entries = parallel_ordered_map(
+            rates,
+            run_one,
+            max_workers=outer_plan.selected_workers,
         )
-        if log_callback:
-            log_callback(
-                f"Sample-rate survey {sample_rate_hz / 1e6:.3f} MSa/s: best PRN {best.prn}, "
-                f"metric {best.best_candidate.metric:.2f}, consistent segments {best.consistent_segments}, "
-                f"search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+    else:
+        for rate_index, sample_rate_hz in enumerate(rates):
+            local_session = build_local_session(session, sample_rate_hz)
+
+            def nested_progress(local_progress: int, *, base=rate_index) -> None:
+                if progress_callback:
+                    combined = int(((base + local_progress / 100.0) / total) * 100)
+                    progress_callback(combined)
+
+            results = scan_prns_from_session(
+                samples,
+                local_session,
+                prns=prn_list,
+                progress_callback=nested_progress,
+                log_callback=None,
             )
+            best = results[0]
+            entries.append(
+                SampleRateSurveyEntry(
+                    sample_rate_hz=float(sample_rate_hz),
+                    best_result=best,
+                    all_results=results,
+                )
+            )
+            if log_callback:
+                log_callback(
+                    f"Sample-rate survey {sample_rate_hz / 1e6:.3f} MSa/s: best PRN {best.prn}, "
+                    f"metric {best.best_candidate.metric:.2f}, consistent segments {best.consistent_segments}, "
+                    f"search frequency {best.best_candidate.carrier_frequency_hz:.1f} Hz."
+                )
 
     entries.sort(
         key=lambda entry: acquisition_rank_key(entry.best_result),

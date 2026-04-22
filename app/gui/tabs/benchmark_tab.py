@@ -62,6 +62,9 @@ class BenchmarkTab(QtWidgets.QWidget):
                 [
                     f"CPU: {result.system_info.get('cpu', 'unknown')}",
                     f"Cores: {result.system_info.get('logical_cores', 'unknown')}",
+                    f"Workers: {result.system_info.get('selected_workers', 'unknown')}",
+                    f"Backend: {result.system_info.get('active_backend', 'unknown')}",
+                    f"GPU: {result.system_info.get('gpu_name', 'not detected')}",
                     f"RAM: {result.system_info.get('ram_gib', 'unknown')} GiB",
                     f"Python: {result.system_info.get('python', 'unknown')}",
                 ]

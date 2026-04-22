@@ -12,3 +12,7 @@ def test_benchmark_returns_components() -> None:
     assert result.components
     assert result.bottleneck_name
     assert any(component.name == "Tracking compute" for component in result.components)
+    assert "logical_cores" in result.system_info
+    assert "selected_workers" in result.system_info
+    assert "active_backend" in result.system_info
+    assert "gpu_name" in result.system_info

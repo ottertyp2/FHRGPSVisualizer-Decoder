@@ -77,6 +77,11 @@ pip install -r requirements.txt
 - `pyqtgraph`
 - `pytest`
 
+Optional acceleration:
+
+- install a CuPy build that matches your CUDA runtime if you want GPU-accelerated FFT-heavy paths on supported Windows systems
+- without CuPy, the app stays fully functional and falls back to multi-core CPU execution
+
 ## Running The App
 
 ```powershell
@@ -102,6 +107,15 @@ powershell -ExecutionPolicy Bypass -File tools/check_git_sync.ps1
 ```
 
 Use that check before pushing when you want a quick confirmation that the worktree status and dual-push remote setup look correct.
+
+## Compute Acceleration
+
+The app can now auto-detect logical CPU cores and an optional CuPy/CUDA GPU backend.
+
+- `Auto` compute mode prefers a usable optional GPU for FFT-heavy paths and otherwise uses the CPU
+- CPU worker count defaults to logical cores minus one to keep the GUI responsive
+- acquisition scans, sample-rate surveys, center sweeps, spectrum averaging, and waterfall FFT rows can use internal parallel workers
+- tracking remains single-threaded on purpose because its loop state is sequential and easier to reason about that way
 
 ## Input Format
 

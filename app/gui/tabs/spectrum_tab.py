@@ -79,11 +79,17 @@ class SpectrumTab(QtWidgets.QWidget):
         fft_size = int(self.fft_size_combo.currentText())
         window_name = self.window_combo.currentText()
         average_count = int(self.average_spin.value())
-        freqs, spectrum = compute_spectrum(samples, sample_rate, fft_size, window_name, average_count)
+        freqs, spectrum = compute_spectrum(samples, sample_rate, fft_size, window_name, average_count, session=session)
         self.spectrum_curve.setData(freqs, spectrum)
         self._update_search_overlay(session, acquisition)
 
-        wf_freqs, wf_times, waterfall = compute_waterfall(samples, sample_rate, fft_size=max(512, fft_size // 2), window_name=window_name)
+        wf_freqs, wf_times, waterfall = compute_waterfall(
+            samples,
+            sample_rate,
+            fft_size=max(512, fft_size // 2),
+            window_name=window_name,
+            session=session,
+        )
         if waterfall.size:
             self.waterfall_image.setImage(waterfall.T, autoLevels=True)
             rect = pg.QtCore.QRectF(
