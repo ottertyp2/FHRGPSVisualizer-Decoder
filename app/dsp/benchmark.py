@@ -98,7 +98,8 @@ def run_benchmark(
     """Benchmark file I/O and key DSP stages to estimate laptop suitability."""
 
     current_rate = float(session.sample_rate)
-    target_rate = 6_000_000.0
+    target_rate = current_rate
+    target_rate_label = f"{target_rate / 1e6:.3f} MSa/s"
     samples_per_ms = int(round(current_rate * 1e-3))
     benchmark_ms = 200
     compute_samples = max(samples_per_ms * benchmark_ms, samples_per_ms * 40)
@@ -235,7 +236,7 @@ def run_benchmark(
             f"Search over {doppler_bins} Doppler bins with {session.integration_ms} ms coherent accumulation.",
         )
     )
-    log(f"Acquisition search: {components[-1].realtime_factor_target:.2f}x realtime at 6 MSa/s.")
+    log(f"Acquisition search: {components[-1].realtime_factor_target:.2f}x realtime at {target_rate_label}.")
 
     if progress_callback:
         progress_callback(70)
@@ -257,7 +258,7 @@ def run_benchmark(
             f"In-memory Early/Prompt/Late tracking over {track_session.tracking_ms} ms.",
         )
     )
-    log(f"Tracking compute: {components[-1].realtime_factor_target:.2f}x realtime at 6 MSa/s.")
+    log(f"Tracking compute: {components[-1].realtime_factor_target:.2f}x realtime at {target_rate_label}.")
 
     if progress_callback:
         progress_callback(85)
@@ -281,12 +282,12 @@ def run_benchmark(
                 "Tracking loop reading 1 ms blocks from the selected IQ file.",
             )
         )
-        log(f"Tracking with file streaming: {components[-1].realtime_factor_target:.2f}x realtime at 6 MSa/s.")
+        log(f"Tracking with file streaming: {components[-1].realtime_factor_target:.2f}x realtime at {target_rate_label}.")
 
     bottleneck = min(components, key=lambda item: item.realtime_factor_target) if components else None
     suitability = (
         f"Bottleneck: {bottleneck.name}. Estimated pipeline speed is "
-        f"{bottleneck.realtime_factor_target:.2f}x realtime at 6 MSa/s."
+        f"{bottleneck.realtime_factor_target:.2f}x realtime at {target_rate_label}."
         if bottleneck
         else "No benchmark components were measured."
     )
@@ -294,9 +295,9 @@ def run_benchmark(
         if bottleneck.realtime_factor_target >= 1.5:
             suitability += " This laptop looks comfortable for offline work and likely near or above realtime at the target rate."
         elif bottleneck.realtime_factor_target >= 1.0:
-            suitability += " This laptop looks usable for 6 MSa/s, but with limited headroom."
+            suitability += f" This laptop looks usable for {target_rate_label}, but with limited headroom."
         else:
-            suitability += " This laptop will likely be slower than realtime at 6 MSa/s unless the workflow is narrowed or optimized."
+            suitability += f" This laptop will likely be slower than realtime at {target_rate_label} unless the workflow is narrowed or optimized."
     if source is not None:
         file_size_gib = Path(target_path).stat().st_size / (1024 ** 3)
         suitability += f" Current file size is {file_size_gib:.2f} GiB."

@@ -9,6 +9,10 @@ import numpy as np
 from PySide6 import QtCore, QtWidgets
 
 from app.dsp.acquisition import acquisition_from_session
+from app.dsp.acquisition import acquisition_interpretation
+from app.dsp.acquisition import acquisition_metric_is_strong
+from app.dsp.acquisition import acquisition_rank_key
+from app.dsp.acquisition import acquisition_result_is_plausible
 from app.dsp.acquisition import scan_prns_from_session
 from app.dsp.acquisition import survey_sample_rates
 from app.dsp.acquisition import sweep_search_centers_from_session
@@ -16,6 +20,7 @@ from app.dsp.benchmark import run_benchmark
 from app.dsp.bitsync import extract_navigation_bits
 from app.dsp.demo import generate_demo_signal
 from app.dsp.io import (
+    COMMON_GNSS_SAMPLE_RATES,
     common_sample_rate_hints,
     inspect_complex64_file,
     load_complex64_file_with_progress,
@@ -310,7 +315,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if metadata.common_rate_duration_hints:
             preferred_hints = []
-            for label in ("2.046 MSa/s", "4.092 MSa/s", "6.000 MSa/s"):
+            for label in ("2.000 MSa/s", "2.046 MSa/s", "4.092 MSa/s", "6.000 MSa/s", "6.061 MSa/s"):
                 if label in metadata.common_rate_duration_hints:
                     preferred_hints.append(f"{label} -> {metadata.common_rate_duration_hints[label]:.2f} s")
             if preferred_hints:
@@ -457,7 +462,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if acquisition is not None:
             all_results = sorted(
                 self.acquisition_results_by_prn.values(),
-                key=lambda item: (item.consistent_segments, item.consistency_score, item.best_candidate.metric),
+                key=acquisition_rank_key,
                 reverse=True,
             )
             self.acquisition_tab.update_result(acquisition, all_results)
@@ -527,7 +532,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_display_samples = display_samples
         self.update_passive_views(display_samples)
         samples = self.current_samples if self.current_samples.size else self.ensure_samples()
-        common_rates = [2_000_000.0, 2_046_000.0, 2_048_000.0, 4_092_000.0, 4_096_000.0, 6_000_000.0]
+        common_rates = list(COMMON_GNSS_SAMPLE_RATES)
         if self.session.sample_rate not in common_rates:
             common_rates.append(float(self.session.sample_rate))
         common_rates = sorted(set(common_rates))
@@ -568,12 +573,17 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         self.session_tab.set_progress(100)
         near_edge = abs(result.best_candidate.doppler_hz) >= (max(abs(self.session.doppler_min), abs(self.session.doppler_max)) - self.session.doppler_step)
-        if result.consistent_segments >= 3:
+        if acquisition_result_is_plausible(result):
             self.append_log(
                 f"Acquisition finished. PRN {result.prn} repeats across {result.consistent_segments} segments, "
                 f"so it looks more plausible than a one-off peak even though the raw metric is {result.best_candidate.metric:.2f}."
             )
-        elif result.best_candidate.metric < 6.0:
+        elif result.consistent_segments >= 3:
+            self.append_log(
+                f"Acquisition finished. PRN {result.prn} repeats across {result.consistent_segments} segments, "
+                f"but the raw metric is still only {result.best_candidate.metric:.2f}, so this remains {acquisition_interpretation(result)}."
+            )
+        elif not acquisition_metric_is_strong(result.best_candidate.metric):
             self.append_log(
                 f"Acquisition finished, but the best metric is only {result.best_candidate.metric:.2f} at "
                 f"{result.best_candidate.carrier_frequency_hz:.1f} Hz "
@@ -603,13 +613,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     acquisition=results[0],
                 )
         self.session_tab.set_progress(100)
-        if results and results[0].consistent_segments >= 3:
+        if results and acquisition_result_is_plausible(results[0]):
             self.append_log(
                 f"PRN scan finished. Best hypothesis is PRN {results[0].prn} with repeated hits in "
                 f"{results[0].consistent_segments} segments at {results[0].best_candidate.carrier_frequency_hz:.1f} Hz. "
                 "That kind of repetition is much more believable than a single isolated peak."
             )
-        elif results and results[0].best_candidate.metric < 6.0:
+        elif results and results[0].consistent_segments >= 3:
+            self.append_log(
+                f"PRN scan finished. The strongest repeated pattern is PRN {results[0].prn}, "
+                f"but its metric is still only {results[0].best_candidate.metric:.2f}, so it remains {acquisition_interpretation(results[0])}. "
+                "This looks more like weak structure than a trustworthy lock candidate."
+            )
+        elif results and not acquisition_metric_is_strong(results[0].best_candidate.metric):
             self.append_log(
                 f"PRN scan finished. Best hypothesis is PRN {results[0].prn} at {results[0].best_candidate.carrier_frequency_hz:.1f} Hz "
                 f"(relative Doppler {results[0].best_candidate.doppler_hz:+.1f} Hz) with metric {results[0].best_candidate.metric:.2f}, "
@@ -633,10 +649,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self.acquisition_result = best_entry.best_result
             self.acquisition_results_by_prn[best_entry.best_result.prn] = best_entry.best_result
             self.refresh_satellite_views()
-            self.append_log(
-                f"Search-center sweep finished. Best center is {best_entry.search_center_hz:.1f} Hz "
-                f"with PRN {best_entry.best_result.prn} and metric {best_entry.best_result.best_candidate.metric:.2f}."
-            )
+            if acquisition_metric_is_strong(best_entry.best_result.best_candidate.metric):
+                self.append_log(
+                    f"Search-center sweep finished. Best center is {best_entry.search_center_hz:.1f} Hz "
+                    f"with PRN {best_entry.best_result.prn} and metric {best_entry.best_result.best_candidate.metric:.2f}."
+                )
+            else:
+                self.append_log(
+                    f"Search-center sweep finished. Best center is {best_entry.search_center_hz:.1f} Hz "
+                    f"with PRN {best_entry.best_result.prn}, but the metric is still only "
+                    f"{best_entry.best_result.best_candidate.metric:.2f}. "
+                    "That means the IF / center sweep did not uncover a strong acquisition."
+                )
         else:
             self.append_log("Search-center sweep finished, but no candidates were produced.")
         self.session_tab.set_progress(100)
@@ -662,11 +686,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     session=self.session,
                     acquisition=best_entry.best_result,
                 )
-            self.append_log(
-                f"Sample-rate survey finished. Best hypothesis is {best_entry.sample_rate_hz / 1e6:.3f} MSa/s "
-                f"with PRN {best_entry.best_result.prn}, metric {best_entry.best_result.best_candidate.metric:.2f}, "
-                f"consistent segments {best_entry.best_result.consistent_segments}."
-            )
+            if acquisition_metric_is_strong(best_entry.best_result.best_candidate.metric):
+                self.append_log(
+                    f"Sample-rate survey finished. Best hypothesis is {best_entry.sample_rate_hz / 1e6:.3f} MSa/s "
+                    f"with PRN {best_entry.best_result.prn}, metric {best_entry.best_result.best_candidate.metric:.2f}, "
+                    f"consistent segments {best_entry.best_result.consistent_segments}."
+                )
+            else:
+                self.append_log(
+                    f"Sample-rate survey finished. The least-bad hypothesis is {best_entry.sample_rate_hz / 1e6:.3f} MSa/s "
+                    f"with PRN {best_entry.best_result.prn}, metric {best_entry.best_result.best_candidate.metric:.2f}, "
+                    f"consistent segments {best_entry.best_result.consistent_segments}. "
+                    "That is still weak, so the sample-rate survey did not find a convincing lock."
+                )
         else:
             self.append_log("Sample-rate survey finished, but no candidates were produced.")
         self.session_tab.set_progress(100)

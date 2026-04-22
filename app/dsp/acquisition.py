@@ -18,6 +18,9 @@ from app.models import (
 )
 
 
+STRONG_ACQUISITION_METRIC_THRESHOLD = 6.0
+
+
 @dataclass(slots=True)
 class AcquisitionConfig:
     """Compact acquisition settings."""
@@ -94,6 +97,46 @@ def _cluster_segment_candidates(
             best_cluster = cluster
             best_score = score
     return best_cluster, float(max(best_score, 0.0))
+
+
+def acquisition_metric_is_strong(metric: float) -> bool:
+    """Return whether a raw acquisition metric is strong enough to trust."""
+
+    return float(metric) >= STRONG_ACQUISITION_METRIC_THRESHOLD
+
+
+def acquisition_result_is_plausible(result: AcquisitionResult) -> bool:
+    """Return whether repetition and raw metric together look believable."""
+
+    return acquisition_metric_is_strong(result.best_candidate.metric) and result.consistent_segments >= 3
+
+
+def acquisition_interpretation(result: AcquisitionResult) -> str:
+    """Provide a short user-facing interpretation label for one result."""
+
+    if acquisition_result_is_plausible(result):
+        return "repeated / plausible"
+    if result.consistent_segments >= 3:
+        return "repeated but still weak"
+    return "weak / uncertain"
+
+
+def acquisition_rank_key(result: AcquisitionResult) -> tuple[float, ...]:
+    """Rank strong acquisitions by consistency and weak ones by raw metric first."""
+
+    if acquisition_metric_is_strong(result.best_candidate.metric):
+        return (
+            1.0,
+            float(result.consistent_segments),
+            float(result.consistency_score),
+            float(result.best_candidate.metric),
+        )
+    return (
+        0.0,
+        float(result.best_candidate.metric),
+        float(result.consistent_segments),
+        float(result.consistency_score),
+    )
 
 
 def acquire_signal(
@@ -346,11 +389,7 @@ def scan_prns_from_session(
         results.append(result)
 
     results.sort(
-        key=lambda item: (
-            item.consistent_segments,
-            item.consistency_score,
-            item.best_candidate.metric,
-        ),
+        key=acquisition_rank_key,
         reverse=True,
     )
     if progress_callback:
@@ -398,11 +437,7 @@ def sweep_search_centers_from_session(
             )
 
     entries.sort(
-        key=lambda item: (
-            item.best_result.consistent_segments,
-            item.best_result.consistency_score,
-            item.best_result.best_candidate.metric,
-        ),
+        key=lambda item: acquisition_rank_key(item.best_result),
         reverse=True,
     )
     if progress_callback:
@@ -463,11 +498,7 @@ def survey_sample_rates(
             )
 
     entries.sort(
-        key=lambda entry: (
-            entry.best_result.consistent_segments,
-            entry.best_result.consistency_score,
-            entry.best_result.best_candidate.metric,
-        ),
+        key=lambda entry: acquisition_rank_key(entry.best_result),
         reverse=True,
     )
     if progress_callback:

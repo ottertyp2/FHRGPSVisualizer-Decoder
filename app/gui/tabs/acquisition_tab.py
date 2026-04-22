@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
+from app.dsp.acquisition import acquisition_interpretation
 from app.dsp.utils import TOOLTIPS
 from app.models import AcquisitionResult
 
@@ -172,7 +173,8 @@ class AcquisitionTab(QtWidgets.QWidget):
             f"code phase {result.best_candidate.code_phase_samples} samples, "
             f"segment start {result.best_candidate.segment_start_sample / max(result.sample_rate_hz, 1.0):.3f} s, "
             f"metric {result.best_candidate.metric:.2f}, "
-            f"consistent segments {result.consistent_segments}. "
+            f"consistent segments {result.consistent_segments}, "
+            f"interpretation {acquisition_interpretation(result)}. "
             "A strong, repeated peak across segments is more trustworthy than one isolated hit."
         )
         self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
@@ -195,7 +197,7 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.satellite_table.setRowCount(len(results))
         for row, sat_result in enumerate(results):
             candidate = sat_result.best_candidate
-            interpretation = "repeated / plausible" if sat_result.consistent_segments >= 3 else "weak / uncertain"
+            interpretation = acquisition_interpretation(sat_result)
             self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
             self.satellite_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
             self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(sat_result.consistent_segments)))
@@ -216,13 +218,15 @@ class AcquisitionTab(QtWidgets.QWidget):
                     f"Peak metric: {result.best_candidate.metric:.2f}",
                     f"Consistent segment count: {result.consistent_segments}",
                     f"Consistency score: {result.consistency_score:.2f}",
+                    f"Interpretation label: {acquisition_interpretation(result)}",
                     "",
-                    "Interpretation:",
+                    "How to read this:",
                     "- The brighter the heatmap peak, the better the local PRN matches the signal.",
                     "- Search frequency is the actual tone removed in the sample domain.",
                     "- Relative Doppler is the offset around the chosen IF / search center.",
                     "- Code phase tells you where the PRN alignment happens within the 1 ms code.",
                     "- Repeated hits across different file segments are much more convincing than one isolated maximum.",
+                    "- Repetition alone is not enough when the raw metric stays weak across every segment.",
                     "",
                     "Segment evidence:",
                 ]

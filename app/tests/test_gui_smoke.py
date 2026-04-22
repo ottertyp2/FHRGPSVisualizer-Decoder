@@ -11,5 +11,6 @@ def test_main_window_smoke() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
     assert window.tabs.count() == 8
+    assert window.session_tab.sample_rate_spin.value() == 6_061_000.0
     assert window.acquisition_tab.center_sweep_button.text() == "Sweep Search Center"
     assert window.acquisition_tab.auto_detect_button.text() == "Auto Detect Capture"

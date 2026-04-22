@@ -7,19 +7,22 @@ from typing import Any
 
 import numpy as np
 
+DEFAULT_SAMPLE_RATE_HZ = 6_061_000.0
+DEFAULT_WINDOW_SAMPLES = int(DEFAULT_SAMPLE_RATE_HZ)
+
 
 @dataclass(slots=True)
 class SessionConfig:
     """User-selected session settings for offline analysis."""
 
     file_path: str | None = None
-    sample_rate: float = 6_000_000.0
+    sample_rate: float = DEFAULT_SAMPLE_RATE_HZ
     center_frequency: float = 1_575_420_000.0
     is_baseband: bool = True
     if_frequency_hz: float = 0.0
     data_type: str = "complex64_le"
     start_sample: int = 0
-    sample_count: int = 6_000_000
+    sample_count: int = DEFAULT_WINDOW_SAMPLES
     prn: int = 1
     doppler_min: int = -6_000
     doppler_max: int = 6_000

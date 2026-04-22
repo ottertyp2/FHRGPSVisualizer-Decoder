@@ -85,6 +85,16 @@ pytest app/tests
 
 The test suite includes unit coverage for DSP helpers plus GUI smoke tests.
 
+## Development Workflow
+
+This repository expects shareable changes to be committed and pushed to both GitHub and GitLab through `origin`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/check_git_sync.ps1
+```
+
+Use that check before pushing when you want a quick confirmation that the worktree status and dual-push remote setup look correct.
+
 ## Input Format
 
 The main GUI workflow currently assumes:
@@ -95,17 +105,18 @@ The main GUI workflow currently assumes:
 
 Default working assumptions in the UI:
 
-- sample rate: `6.000 MSa/s`
+- sample rate: `6.061 MSa/s` (`6061000 Sa/s` for the latest sample file)
 - center frequency: `1575.42 MHz`
 - signal mode: baseband unless you specify a nonzero IF / search center
 
-Those defaults are practical starting points, not universal truth. If a real capture behaves strangely, the app provides tools to test other sample-rate and IF hypotheses instead of forcing one interpretation.
+The sample-rate field is freely editable, so you can enter exact recorder values instead of rounding to a nearby preset. Those defaults are practical starting points, not universal truth. If a real capture behaves strangely, the app provides tools to test other sample-rate and IF hypotheses instead of forcing one interpretation.
 
 ## First-Run Workflow
 
 1. Launch the app with `python -m app.main`.
 2. Open a `.bin` or `.dat` IQ file, or generate the built-in demo signal.
 3. In `File / Session`, set sample rate, signal mode, start sample, and window size.
+   For the latest real sample, use `6.061 MSa/s` (`6061000 Sa/s`).
 4. Click `Preview` to inspect a bounded window before committing to heavier DSP steps.
 5. Go to `Acquisition` and run either a single-PRN acquisition or a PRN scan.
 6. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
@@ -180,7 +191,7 @@ The benchmark estimates how well the current machine handles the workload by mea
 - acquisition cost
 - tracking cost
 
-The slowest measured component is highlighted as the bottleneck and compared against a `6 MSa/s` target workload.
+The slowest measured component is highlighted as the bottleneck and compared against the current session sample rate target.
 
 ## Large Recording Behavior
 

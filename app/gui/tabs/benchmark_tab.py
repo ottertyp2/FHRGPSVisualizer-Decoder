@@ -30,7 +30,7 @@ class BenchmarkTab(QtWidgets.QWidget):
         self.system_label.setWordWrap(True)
         layout.addWidget(self.system_label)
 
-        self.plot = pg.PlotWidget(title="Realtime factor at 6 MSa/s")
+        self.plot = pg.PlotWidget(title="Realtime factor at target sample rate")
         self.bar_item = pg.BarGraphItem(x=[], height=[], width=0.6, brush="y")
         self.plot.addItem(self.bar_item)
         self.plot.showGrid(x=True, y=True, alpha=0.3)
@@ -44,7 +44,7 @@ class BenchmarkTab(QtWidgets.QWidget):
                 "MSa/s",
                 "MB/s",
                 "x realtime\ncurrent",
-                "x realtime\n6 MSa/s",
+                "x realtime\ntarget",
                 "10 GiB est. [s]",
                 "Detail",
             ]
@@ -56,6 +56,7 @@ class BenchmarkTab(QtWidgets.QWidget):
         """Refresh the benchmark summary, chart, and table."""
 
         self.summary_label.setText(result.suitability_summary)
+        self.plot.setTitle(f"Realtime factor at {result.target_sample_rate / 1e6:.3f} MSa/s")
         self.system_label.setText(
             " | ".join(
                 [

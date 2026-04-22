@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
 from app.dsp.utils import TOOLTIPS
-from app.models import FileMetadata, SessionConfig
+from app.models import DEFAULT_SAMPLE_RATE_HZ, DEFAULT_WINDOW_SAMPLES, FileMetadata, SessionConfig
 
 
 class SessionTab(QtWidgets.QWidget):
@@ -28,7 +28,8 @@ class SessionTab(QtWidgets.QWidget):
 
         info_label = QtWidgets.QLabel(
             "Load a complex64 IQ file or generate a demo signal, then inspect a sample window. "
-            "The default workflow assumes 6 MSa/s complex baseband IQ."
+            "The default workflow starts at 6.061 MSa/s complex baseband IQ, and the sample-rate field is freely editable "
+            "(for example 6061000 Sa/s for 6.061 MHz)."
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -38,9 +39,15 @@ class SessionTab(QtWidgets.QWidget):
         self.file_edit.setReadOnly(True)
         self.sample_rate_spin = QtWidgets.QDoubleSpinBox()
         self.sample_rate_spin.setRange(1_000.0, 100_000_000.0)
-        self.sample_rate_spin.setDecimals(1)
-        self.sample_rate_spin.setValue(6_000_000.0)
+        self.sample_rate_spin.setDecimals(0)
+        self.sample_rate_spin.setGroupSeparatorShown(True)
+        self.sample_rate_spin.setSingleStep(1_000.0)
+        self.sample_rate_spin.setValue(DEFAULT_SAMPLE_RATE_HZ)
         self.sample_rate_spin.setSuffix(" Sa/s")
+        self.sample_rate_spin.setToolTip(
+            "Exact sample rate in samples per second. "
+            "This field is editable, for example 6061000 Sa/s for a 6.061 MHz recording."
+        )
         self.center_frequency_spin = QtWidgets.QDoubleSpinBox()
         self.center_frequency_spin.setRange(0.0, 10_000_000_000.0)
         self.center_frequency_spin.setDecimals(1)
@@ -61,7 +68,7 @@ class SessionTab(QtWidgets.QWidget):
         self.start_sample_spin.setRange(0, 2_000_000_000)
         self.sample_count_spin = QtWidgets.QSpinBox()
         self.sample_count_spin.setRange(1_000, 2_000_000_000)
-        self.sample_count_spin.setValue(6_000_000)
+        self.sample_count_spin.setValue(DEFAULT_WINDOW_SAMPLES)
         self.preload_checkbox = QtWidgets.QCheckBox("Preload full source to RAM")
         self.preload_checkbox.setChecked(True)
         self.preload_checkbox.setToolTip(

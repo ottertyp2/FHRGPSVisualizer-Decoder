@@ -6,7 +6,7 @@ import numpy as np
 
 from app.dsp.gps_ca import CA_CODE_RATE_HZ, sample_ca_code
 from app.dsp.navdecode import PREAMBLE, compute_lnav_parity
-from app.models import DemoSignalResult
+from app.models import DEFAULT_SAMPLE_RATE_HZ, DemoSignalResult
 
 
 def _build_demo_nav_bits(num_bits: int) -> np.ndarray:
@@ -28,7 +28,7 @@ def _build_demo_nav_bits(num_bits: int) -> np.ndarray:
 
 
 def generate_demo_signal(
-    sample_rate: float = 6_000_000.0,
+    sample_rate: float = DEFAULT_SAMPLE_RATE_HZ,
     duration_s: float = 0.5,
     prn: int = 1,
     doppler_hz: float = 2_000.0,

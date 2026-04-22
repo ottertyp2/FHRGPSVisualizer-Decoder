@@ -1,5 +1,16 @@
 # AGENTS.md
 
+## Mandatory startup and finish checklist
+
+Every agent instance working in this repository must do these checks explicitly:
+
+- Read this `AGENTS.md` before making changes.
+- Before finishing a shareable task, review `git status` and `git remote -v`.
+- If the task is ready to share, commit only the intended files.
+- Push the exact same branch/commit through `origin` so both GitHub and GitLab receive it.
+- If the worktree is dirty with unrelated changes, do not silently skip sync; report the situation clearly.
+- If one remote push fails, say which host failed and which host succeeded.
+
 ## Purpose
 
 This repository hosts an educational offline GPS L1 C/A decoder and visualizer.
@@ -45,6 +56,7 @@ Agents working here should preserve the project's core priorities:
 - Prefer keeping `origin` configured with both push URLs so one clean `git push origin <branch>` updates GitHub and GitLab together.
 - Do not push partial, broken, or unrelated work just to satisfy the sync rule; stage and commit only the files that belong to the task being delivered.
 - If one remote push fails, report it clearly so the repository state can be corrected instead of assuming both hosts were updated.
+- Use `powershell -ExecutionPolicy Bypass -File tools/check_git_sync.ps1` as a quick pre-push verification when needed.
 
 ## Large-file policy
 
