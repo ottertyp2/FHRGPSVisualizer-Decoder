@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.dsp.bitsync import extract_navigation_bits
 from app.dsp.utils import bits_to_str
-from app.models import BitDecisionResult, NavigationDecodeResult, NavigationWord
+from app.models import BitDecisionResult, NavigationDecodeResult, NavigationWord, TrackingState
 
 PREAMBLE = "10001011"
 
@@ -101,3 +102,36 @@ def decode_navigation_bits(bits: BitDecisionResult) -> NavigationDecodeResult:
         results.summary_lines.append("No LNAV preamble detected in the current bit stream.")
 
     return results
+
+
+def decode_navigation_from_tracking(
+    tracking: TrackingState,
+    progress_callback=None,
+    log_callback=None,
+) -> tuple[BitDecisionResult, NavigationDecodeResult]:
+    """Run bit extraction and LNAV framing with coarse progress updates."""
+
+    if log_callback:
+        log_callback(f"Decoding PRN {tracking.prn}: extracting 20 ms navigation bits.")
+    if progress_callback:
+        progress_callback(5)
+
+    bit_result = extract_navigation_bits(tracking)
+
+    if log_callback:
+        log_callback(
+            f"Decoding PRN {tracking.prn}: scanning {bit_result.bit_values.size} hard decisions for LNAV preambles."
+        )
+    if progress_callback:
+        progress_callback(55)
+
+    nav_result = decode_navigation_bits(bit_result)
+
+    if progress_callback:
+        progress_callback(100)
+    if log_callback:
+        log_callback(
+            f"Decoding PRN {tracking.prn}: found {len(nav_result.preamble_indices)} preambles and "
+            f"{nav_result.parity_ok_count} parity-valid words."
+        )
+    return bit_result, nav_result

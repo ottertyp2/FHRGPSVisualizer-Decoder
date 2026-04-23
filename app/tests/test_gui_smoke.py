@@ -17,3 +17,6 @@ def test_main_window_smoke() -> None:
     assert "Runtime status:" in window.session_tab.compute_status_label.text()
     assert window.acquisition_tab.center_sweep_button.text() == "Sweep Search Center"
     assert window.acquisition_tab.auto_detect_button.text() == "Auto Detect Capture"
+    assert window.acquisition_tab.task_status_label.text() == "Acquisition idle."
+    assert window.tracking_tab.task_status_label.text() == "Tracking idle."
+    assert window.navigation_tab.task_status_label.text() == "Navigation decoder idle."

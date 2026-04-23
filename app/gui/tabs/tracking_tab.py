@@ -38,6 +38,15 @@ class TrackingTab(QtWidgets.QWidget):
         layout.addLayout(control_row)
 
         self.status_label = QtWidgets.QLabel("Tracking not started.")
+        self.task_status_label = QtWidgets.QLabel("Tracking idle.")
+        self.task_status_label.setWordWrap(True)
+        layout.addWidget(self.task_status_label)
+
+        self.task_progress_bar = QtWidgets.QProgressBar()
+        self.task_progress_bar.setRange(0, 100)
+        self.task_progress_bar.setValue(0)
+        layout.addWidget(self.task_progress_bar)
+
         layout.addWidget(self.status_label)
 
         self.evidence_text = QtWidgets.QPlainTextEdit()
@@ -94,6 +103,16 @@ class TrackingTab(QtWidgets.QWidget):
             if index >= 0:
                 self.prn_combo.setCurrentIndex(index)
         self.prn_combo.blockSignals(False)
+
+    def set_task_message(self, message: str) -> None:
+        """Show the current tracking-side job message."""
+
+        self.task_status_label.setText(message)
+
+    def set_task_progress(self, value: int) -> None:
+        """Show tracking-side worker progress."""
+
+        self.task_progress_bar.setValue(max(0, min(100, int(value))))
 
     def update_state(
         self,

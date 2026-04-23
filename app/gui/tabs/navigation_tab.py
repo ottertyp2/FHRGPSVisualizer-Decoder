@@ -37,6 +37,15 @@ class NavigationTab(QtWidgets.QWidget):
 
         self.summary_label = QtWidgets.QLabel("Navigation decoding not started.")
         self.summary_label.setWordWrap(True)
+        self.task_status_label = QtWidgets.QLabel("Navigation decoder idle.")
+        self.task_status_label.setWordWrap(True)
+        layout.addWidget(self.task_status_label)
+
+        self.task_progress_bar = QtWidgets.QProgressBar()
+        self.task_progress_bar.setRange(0, 100)
+        self.task_progress_bar.setValue(0)
+        layout.addWidget(self.task_progress_bar)
+
         layout.addWidget(self.summary_label)
 
         self.evidence_text = QtWidgets.QPlainTextEdit()
@@ -84,6 +93,16 @@ class NavigationTab(QtWidgets.QWidget):
             if index >= 0:
                 self.prn_combo.setCurrentIndex(index)
         self.prn_combo.blockSignals(False)
+
+    def set_task_message(self, message: str) -> None:
+        """Show the current navigation-side job message."""
+
+        self.task_status_label.setText(message)
+
+    def set_task_progress(self, value: int) -> None:
+        """Show navigation-side worker progress."""
+
+        self.task_progress_bar.setValue(max(0, min(100, int(value))))
 
     def update_results(
         self,

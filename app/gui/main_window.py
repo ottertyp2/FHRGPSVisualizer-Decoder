@@ -17,7 +17,6 @@ from app.dsp.acquisition import scan_prns_from_session
 from app.dsp.acquisition import survey_sample_rates
 from app.dsp.acquisition import sweep_search_centers_from_session
 from app.dsp.benchmark import run_benchmark
-from app.dsp.bitsync import extract_navigation_bits
 from app.dsp.compute import resolve_compute_plan
 from app.dsp.demo import generate_demo_signal
 from app.dsp.io import (
@@ -27,7 +26,7 @@ from app.dsp.io import (
     load_complex64_file_with_progress,
     load_complex64_samples_with_progress,
 )
-from app.dsp.navdecode import decode_navigation_bits
+from app.dsp.navdecode import decode_navigation_from_tracking
 from app.dsp.tracking import track_signal
 from app.gui.tabs.acquisition_tab import AcquisitionTab
 from app.gui.tabs.benchmark_tab import BenchmarkTab
@@ -78,6 +77,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.search_center_sweep_result: SearchCenterSweepResult | None = None
         self.sample_rate_survey_result: SampleRateSurveyResult | None = None
         self.selected_prn: int | None = None
+        self.pending_navigation_prn: int | None = None
 
         self.tabs = QtWidgets.QTabWidget()
         self.session_tab = SessionTab()
@@ -481,11 +481,37 @@ class MainWindow(QtWidgets.QMainWindow):
         if bit_result is not None and nav_result is not None:
             self.navigation_tab.update_results(bit_result, nav_result, self.selected_prn, acquisition=acquisition, tracking=tracking)
 
-    def _start_worker(self, worker: Worker, finished_handler) -> None:
+    def _set_tab_task_failed(self, tab, message: str) -> None:
+        """Show a failed task state on one processing tab."""
+
+        tab.set_task_message(message)
+        tab.set_task_progress(0)
+
+    def _set_tab_task_finished(self, tab, message: str) -> None:
+        """Show a completed task state on one processing tab."""
+
+        tab.set_task_message(message)
+        tab.set_task_progress(100)
+
+    def _start_worker(
+        self,
+        worker: Worker,
+        finished_handler,
+        *,
+        progress_handlers: list | None = None,
+        log_handlers: list | None = None,
+        error_handlers: list | None = None,
+    ) -> None:
         self.session_tab.set_progress(0)
         worker.signals.progress.connect(self.session_tab.set_progress)
+        for handler in progress_handlers or []:
+            worker.signals.progress.connect(handler)
         worker.signals.log.connect(self.append_log)
+        for handler in log_handlers or []:
+            worker.signals.log.connect(handler)
         worker.signals.error.connect(self._handle_worker_error)
+        for handler in error_handlers or []:
+            worker.signals.error.connect(handler)
         worker.signals.finished.connect(finished_handler)
         self.thread_pool.start(worker)
 
@@ -498,6 +524,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Launch acquisition in a background worker."""
 
         self.sync_session_from_ui()
+        self.acquisition_tab.set_task_message(f"Running acquisition for PRN {self.session.prn}.")
+        self.acquisition_tab.set_task_progress(0)
         full_samples = self.ensure_samples()
         if full_samples.size == 0:
             return
@@ -505,13 +533,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_display_samples = display_samples
         self.update_passive_views(display_samples)
         samples = self.load_acquisition_samples()
+        self.tabs.setCurrentWidget(self.acquisition_tab)
         worker = Worker(acquisition_from_session, samples, self.session)
-        self._start_worker(worker, self._on_acquisition_finished)
+        self._start_worker(
+            worker,
+            self._on_acquisition_finished,
+            progress_handlers=[self.acquisition_tab.set_task_progress],
+            log_handlers=[self.acquisition_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.acquisition_tab, "Acquisition failed. Check File / Session log.")],
+        )
 
     def start_search_center_sweep(self) -> None:
         """Try multiple IF / search-center hypotheses automatically."""
 
         self.sync_session_from_ui()
+        self.acquisition_tab.set_task_message("Sweeping IF / search-center hypotheses.")
+        self.acquisition_tab.set_task_progress(0)
         full_samples = self.ensure_samples()
         if full_samples.size == 0:
             return
@@ -527,12 +564,21 @@ class MainWindow(QtWidgets.QMainWindow):
             centers,
             list(range(1, 33)),
         )
-        self._start_worker(worker, self._on_search_center_sweep_finished)
+        self.tabs.setCurrentWidget(self.acquisition_tab)
+        self._start_worker(
+            worker,
+            self._on_search_center_sweep_finished,
+            progress_handlers=[self.acquisition_tab.set_task_progress],
+            log_handlers=[self.acquisition_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.acquisition_tab, "Search-center sweep failed. Check File / Session log.")],
+        )
 
     def start_sample_rate_survey(self) -> None:
         """Try several common GNSS sample-rate hypotheses automatically."""
 
         self.sync_session_from_ui()
+        self.acquisition_tab.set_task_message("Surveying common GNSS sample-rate hypotheses.")
+        self.acquisition_tab.set_task_progress(0)
         full_samples = self.ensure_samples()
         if full_samples.size == 0:
             return
@@ -551,12 +597,21 @@ class MainWindow(QtWidgets.QMainWindow):
             common_rates,
             list(range(1, 33)),
         )
-        self._start_worker(worker, self._on_sample_rate_survey_finished)
+        self.tabs.setCurrentWidget(self.acquisition_tab)
+        self._start_worker(
+            worker,
+            self._on_sample_rate_survey_finished,
+            progress_handlers=[self.acquisition_tab.set_task_progress],
+            log_handlers=[self.acquisition_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.acquisition_tab, "Sample-rate survey failed. Check File / Session log.")],
+        )
 
     def scan_all_prns(self) -> None:
         """Run acquisition over PRNs 1..32 for a more intuitive satellite overview."""
 
         self.sync_session_from_ui()
+        self.acquisition_tab.set_task_message("Scanning PRNs 1 through 32.")
+        self.acquisition_tab.set_task_progress(0)
         full_samples = self.ensure_samples()
         if full_samples.size == 0:
             return
@@ -565,7 +620,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_passive_views(display_samples)
         samples = self.load_acquisition_samples()
         worker = Worker(scan_prns_from_session, samples, self.session, list(range(1, 33)))
-        self._start_worker(worker, self._on_acquisition_scan_finished)
+        self.tabs.setCurrentWidget(self.acquisition_tab)
+        self._start_worker(
+            worker,
+            self._on_acquisition_scan_finished,
+            progress_handlers=[self.acquisition_tab.set_task_progress],
+            log_handlers=[self.acquisition_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.acquisition_tab, "PRN scan failed. Check File / Session log.")],
+        )
 
     def _on_acquisition_finished(self, result: AcquisitionResult) -> None:
         self.acquisition_result = result
@@ -605,6 +667,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         else:
             self.append_log("Acquisition finished.")
+        self._set_tab_task_finished(self.acquisition_tab, f"Acquisition finished for PRN {result.prn}.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
     def _on_acquisition_scan_finished(self, results: list[AcquisitionResult]) -> None:
@@ -646,6 +709,13 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         else:
             self.append_log(f"PRN scan finished. Ranked {len(results)} satellite hypotheses.")
+        if results:
+            self._set_tab_task_finished(
+                self.acquisition_tab,
+                f"PRN scan finished. Best current hypothesis is PRN {results[0].prn}.",
+            )
+        else:
+            self._set_tab_task_finished(self.acquisition_tab, "PRN scan finished with no ranked hypotheses.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
     def _on_search_center_sweep_finished(self, result: SearchCenterSweepResult) -> None:
@@ -672,6 +742,13 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.append_log("Search-center sweep finished, but no candidates were produced.")
         self.session_tab.set_progress(100)
+        if result.entries:
+            self._set_tab_task_finished(
+                self.acquisition_tab,
+                f"Search-center sweep finished. Best center {result.entries[0].search_center_hz:.1f} Hz.",
+            )
+        else:
+            self._set_tab_task_finished(self.acquisition_tab, "Search-center sweep finished with no candidates.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
     def _on_sample_rate_survey_finished(self, result: SampleRateSurveyResult) -> None:
@@ -710,6 +787,13 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.append_log("Sample-rate survey finished, but no candidates were produced.")
         self.session_tab.set_progress(100)
+        if result.entries:
+            self._set_tab_task_finished(
+                self.acquisition_tab,
+                f"Sample-rate survey finished. Best rate {result.entries[0].sample_rate_hz / 1e6:.3f} MSa/s.",
+            )
+        else:
+            self._set_tab_task_finished(self.acquisition_tab, "Sample-rate survey finished with no candidates.")
         self.tabs.setCurrentWidget(self.acquisition_tab)
 
     def start_tracking(self) -> None:
@@ -718,17 +802,28 @@ class MainWindow(QtWidgets.QMainWindow):
         selected_prn = self.selected_prn or self.acquisition_tab.prn_spin.value()
         acquisition = self.acquisition_results_by_prn.get(selected_prn) or self.acquisition_result
         if acquisition is None:
+            self.tracking_tab.set_task_message("Run acquisition before tracking.")
+            self.tracking_tab.set_task_progress(0)
             QtWidgets.QMessageBox.warning(self, "Tracking", "Run acquisition before tracking.")
             return
         self.sync_session_from_ui()
         self.session.prn = selected_prn
+        self.tracking_tab.set_task_message(f"Tracking PRN {selected_prn}.")
+        self.tracking_tab.set_task_progress(0)
         source_samples = self.ensure_samples()
         start_offset = int(acquisition.best_candidate.segment_start_sample)
         samples = source_samples[start_offset:] if start_offset < source_samples.size else source_samples
         if samples.size == 0:
             return
+        self.tabs.setCurrentWidget(self.tracking_tab)
         worker = Worker(track_signal, samples, self.session, acquisition)
-        self._start_worker(worker, self._on_tracking_finished)
+        self._start_worker(
+            worker,
+            self._on_tracking_finished,
+            progress_handlers=[self.tracking_tab.set_task_progress],
+            log_handlers=[self.tracking_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.tracking_tab, "Tracking failed. Check File / Session log.")],
+        )
 
     def _on_tracking_finished(self, result: TrackingState) -> None:
         self.tracking_state = result
@@ -741,6 +836,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_satellite_views()
         self.session_tab.set_progress(100)
         self.append_log("Tracking finished.")
+        self._set_tab_task_finished(self.tracking_tab, f"Tracking finished for PRN {result.prn}.")
         self.tabs.setCurrentWidget(self.tracking_tab)
 
     def decode_navigation(self) -> None:
@@ -749,15 +845,45 @@ class MainWindow(QtWidgets.QMainWindow):
         selected_prn = self.selected_prn
         tracking = self.tracking_results_by_prn.get(selected_prn) if selected_prn is not None else self.tracking_state
         if tracking is None:
+            self.navigation_tab.set_task_message("Run tracking before decoding.")
+            self.navigation_tab.set_task_progress(0)
             QtWidgets.QMessageBox.warning(self, "Navigation", "Run tracking before bit decoding.")
             return
-        self.bit_result = extract_navigation_bits(tracking)
-        self.nav_result = decode_navigation_bits(self.bit_result)
+        self.navigation_tab.set_task_message(f"Decoding PRN {tracking.prn}.")
+        self.navigation_tab.set_task_progress(0)
+        self.pending_navigation_prn = tracking.prn
+        self.tabs.setCurrentWidget(self.navigation_tab)
+        worker = Worker(decode_navigation_from_tracking, tracking)
+        self._start_worker(
+            worker,
+            self._on_navigation_finished,
+            progress_handlers=[self.navigation_tab.set_task_progress],
+            log_handlers=[self.navigation_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.navigation_tab, "Navigation decode failed. Check File / Session log.")],
+        )
+
+    def _on_navigation_finished(self, result: tuple[BitDecisionResult, NavigationDecodeResult]) -> None:
+        bit_result, nav_result = result
+        tracking_prn = self.pending_navigation_prn
+        self.pending_navigation_prn = None
+        tracking = self.tracking_results_by_prn.get(tracking_prn) if tracking_prn is not None else self.tracking_state
+        if tracking is None:
+            self._set_tab_task_failed(self.navigation_tab, "Navigation decode finished, but tracking state is no longer available.")
+            self.session_tab.set_progress(0)
+            return
+        self.bit_result = bit_result
+        self.nav_result = nav_result
         self.bit_results_by_prn[tracking.prn] = self.bit_result
         self.nav_results_by_prn[tracking.prn] = self.nav_result
         self.selected_prn = tracking.prn
         self.refresh_satellite_views()
+        self.session_tab.set_progress(100)
         self.append_log("Bit extraction and LNAV framing finished.")
+        self._set_tab_task_finished(
+            self.navigation_tab,
+            f"Navigation decode finished for PRN {tracking.prn}: "
+            f"{len(nav_result.preamble_indices)} preambles, {nav_result.parity_ok_count} parity-valid words.",
+        )
         self.tabs.setCurrentWidget(self.navigation_tab)
 
     def generate_demo(self) -> None:

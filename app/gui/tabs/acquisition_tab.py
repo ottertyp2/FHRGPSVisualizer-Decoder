@@ -94,6 +94,15 @@ class AcquisitionTab(QtWidgets.QWidget):
         action_row.addStretch()
         layout.addLayout(action_row)
 
+        self.task_status_label = QtWidgets.QLabel("Acquisition idle.")
+        self.task_status_label.setWordWrap(True)
+        layout.addWidget(self.task_status_label)
+
+        self.task_progress_bar = QtWidgets.QProgressBar()
+        self.task_progress_bar.setRange(0, 100)
+        self.task_progress_bar.setValue(0)
+        layout.addWidget(self.task_progress_bar)
+
         self.summary_label = QtWidgets.QLabel("No acquisition result yet. Run one PRN or scan multiple PRNs.")
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
@@ -162,6 +171,16 @@ class AcquisitionTab(QtWidgets.QWidget):
         except (TypeError, ValueError, AttributeError):
             return
         self.selection_changed.emit(prn)
+
+    def set_task_message(self, message: str) -> None:
+        """Show the current acquisition-side job message."""
+
+        self.task_status_label.setText(message)
+
+    def set_task_progress(self, value: int) -> None:
+        """Show acquisition-side worker progress."""
+
+        self.task_progress_bar.setValue(max(0, min(100, int(value))))
 
     def update_result(self, result: AcquisitionResult, total_results: list[AcquisitionResult] | None = None) -> None:
         """Populate the heatmap and candidate table."""
