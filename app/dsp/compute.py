@@ -170,6 +170,41 @@ def resolve_compute_plan(
     )
 
 
+def split_nested_worker_budget(
+    total_workers: int,
+    *,
+    outer_tasks: int,
+    inner_tasks: int,
+) -> tuple[int, int]:
+    """Split one CPU worker budget across outer and inner parallel loops."""
+
+    total = max(1, int(total_workers))
+    outer = max(1, int(outer_tasks))
+    inner = max(1, int(inner_tasks))
+
+    if outer <= 1:
+        return 1, min(total, inner)
+    if inner <= 1:
+        return min(total, outer), 1
+
+    best_outer = 1
+    best_inner = min(total, inner)
+    best_score = (-1, -1, -1, -1)
+
+    for outer_workers in range(1, min(total, outer) + 1):
+        inner_workers = min(inner, max(1, total // outer_workers))
+        dimensions = int(outer_workers > 1) + int(inner_workers > 1)
+        utilized = outer_workers * inner_workers
+        balance = min(outer_workers, inner_workers)
+        score = (dimensions, utilized, balance, outer_workers)
+        if score > best_score:
+            best_score = score
+            best_outer = outer_workers
+            best_inner = inner_workers
+
+    return best_outer, best_inner
+
+
 class ProgressTracker:
     """Aggregate subtask progress into one monotonic percentage."""
 

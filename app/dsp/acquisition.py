@@ -11,6 +11,7 @@ from app.dsp.compute import (
     get_cupy_module,
     parallel_ordered_map,
     resolve_compute_plan,
+    split_nested_worker_budget,
 )
 from app.dsp.gps_ca import sample_ca_code
 from app.models import (
@@ -554,26 +555,33 @@ def sweep_search_centers_from_session(
     """Sweep several IF / search-center hypotheses and rank the best one."""
 
     centers = search_centers_hz or [0.0]
+    prn_list = prns or list(range(1, 33))
     total = max(len(centers), 1)
     entries: list[SearchCenterSweepEntry] = []
     outer_plan = resolve_compute_plan(
         session.compute_backend,
         session.max_workers,
         gpu_enabled=session.gpu_enabled,
-        max_tasks=total,
+        max_tasks=total * max(1, len(prn_list)),
         prefer_gpu=True,
     )
-    parallel_outer = outer_plan.active_backend == "cpu" and outer_plan.selected_workers > 1 and total > 1
+    outer_workers, inner_workers = split_nested_worker_budget(
+        outer_plan.selected_workers,
+        outer_tasks=total,
+        inner_tasks=max(1, len(prn_list)),
+    )
+    parallel_outer = outer_plan.active_backend == "cpu" and outer_workers > 1 and total > 1
 
     if log_callback:
         gpu_text = outer_plan.gpu_name if outer_plan.gpu_available else "unavailable"
         log_callback(
-            f"Search-center sweep: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, GPU {gpu_text}."
+            f"Search-center sweep: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, "
+            f"outer centers {outer_workers}, inner PRNs {inner_workers}, GPU {gpu_text}."
         )
 
     if parallel_outer:
         tracker = ProgressTracker(total, progress_callback)
-        worker_session = replace(session, compute_backend="cpu", max_workers=1, gpu_enabled=False)
+        worker_session = replace(session, compute_backend="cpu", max_workers=inner_workers, gpu_enabled=False)
 
         def run_one(index: int, center_hz: float) -> SearchCenterSweepEntry:
             local_session = replace(worker_session)
@@ -582,7 +590,7 @@ def sweep_search_centers_from_session(
             results = scan_prns_from_session(
                 samples,
                 local_session,
-                prns=prns,
+                prns=prn_list,
                 progress_callback=lambda value, idx=index: tracker.update(idx, value),
                 log_callback=None,
             )
@@ -597,13 +605,17 @@ def sweep_search_centers_from_session(
         entries = parallel_ordered_map(
             centers,
             run_one,
-            max_workers=outer_plan.selected_workers,
+            max_workers=outer_workers,
         )
     else:
         for center_index, center_hz in enumerate(centers):
             local_session = replace(session)
             local_session.is_baseband = abs(center_hz) < 1e-9
             local_session.if_frequency_hz = float(center_hz)
+            if outer_plan.active_backend == "cpu":
+                local_session.compute_backend = "cpu"
+                local_session.max_workers = inner_workers
+                local_session.gpu_enabled = False
 
             def nested_progress(local_progress: int, *, base=center_index) -> None:
                 if progress_callback:
@@ -613,7 +625,7 @@ def sweep_search_centers_from_session(
             results = scan_prns_from_session(
                 samples,
                 local_session,
-                prns=prns,
+                prns=prn_list,
                 progress_callback=nested_progress,
                 log_callback=None,
             )
@@ -652,15 +664,21 @@ def survey_sample_rates(
         session.compute_backend,
         session.max_workers,
         gpu_enabled=session.gpu_enabled,
-        max_tasks=total,
+        max_tasks=total * max(1, len(prn_list)),
         prefer_gpu=True,
     )
-    parallel_outer = outer_plan.active_backend == "cpu" and outer_plan.selected_workers > 1 and total > 1
+    outer_workers, inner_workers = split_nested_worker_budget(
+        outer_plan.selected_workers,
+        outer_tasks=total,
+        inner_tasks=max(1, len(prn_list)),
+    )
+    parallel_outer = outer_plan.active_backend == "cpu" and outer_workers > 1 and total > 1
 
     if log_callback:
         gpu_text = outer_plan.gpu_name if outer_plan.gpu_available else "unavailable"
         log_callback(
-            f"Sample-rate survey: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, GPU {gpu_text}."
+            f"Sample-rate survey: backend {outer_plan.active_backend}, workers {outer_plan.selected_workers}/{outer_plan.logical_cores}, "
+            f"outer rates {outer_workers}, inner PRNs {inner_workers}, GPU {gpu_text}."
         )
 
     def build_local_session(base_session: SessionConfig, sample_rate_hz: float) -> SessionConfig:
@@ -676,7 +694,7 @@ def survey_sample_rates(
 
     if parallel_outer:
         tracker = ProgressTracker(total, progress_callback)
-        worker_session = replace(session, compute_backend="cpu", max_workers=1, gpu_enabled=False)
+        worker_session = replace(session, compute_backend="cpu", max_workers=inner_workers, gpu_enabled=False)
 
         def run_one(index: int, sample_rate_hz: float) -> SampleRateSurveyEntry:
             local_session = build_local_session(worker_session, sample_rate_hz)
@@ -703,11 +721,15 @@ def survey_sample_rates(
         entries = parallel_ordered_map(
             rates,
             run_one,
-            max_workers=outer_plan.selected_workers,
+            max_workers=outer_workers,
         )
     else:
         for rate_index, sample_rate_hz in enumerate(rates):
             local_session = build_local_session(session, sample_rate_hz)
+            if outer_plan.active_backend == "cpu":
+                local_session.compute_backend = "cpu"
+                local_session.max_workers = inner_workers
+                local_session.gpu_enabled = False
 
             def nested_progress(local_progress: int, *, base=rate_index) -> None:
                 if progress_callback:

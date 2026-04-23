@@ -26,3 +26,15 @@ def test_gpu_request_falls_back_to_cpu_when_unavailable(monkeypatch) -> None:
     assert plan.active_backend == "cpu"
     assert plan.selected_workers == 7
     assert plan.gpu_available is False
+
+
+def test_split_nested_worker_budget_uses_both_levels_when_possible() -> None:
+    outer_workers, inner_workers = compute.split_nested_worker_budget(
+        8,
+        outer_tasks=3,
+        inner_tasks=32,
+    )
+
+    assert outer_workers > 1
+    assert inner_workers > 1
+    assert outer_workers * inner_workers <= 8
