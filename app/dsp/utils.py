@@ -84,11 +84,14 @@ def _compute_power_rows(
     if plan.active_backend == "gpu":
         cupy = get_cupy_module()
         if cupy is not None:
-            gpu_segments = cupy.asarray(np.asarray(segments, dtype=np.complex64))
-            fft_values = cupy.fft.fft(gpu_segments, n=fft_size, axis=1)
-            shifted = cupy.fft.fftshift(fft_values, axes=1)
-            power = 20.0 * cupy.log10(cupy.abs(shifted) + 1e-12)
-            return np.asarray(cupy.asnumpy(power)), "gpu"
+            try:
+                gpu_segments = cupy.asarray(np.asarray(segments, dtype=np.complex64))
+                fft_values = cupy.fft.fft(gpu_segments, n=fft_size, axis=1)
+                shifted = cupy.fft.fftshift(fft_values, axes=1)
+                power = 20.0 * cupy.log10(cupy.abs(shifted) + 1e-12)
+                return np.asarray(cupy.asnumpy(power)), "gpu"
+            except Exception:
+                pass
 
     cpu_workers = min(plan.selected_workers, len(segments))
     if cpu_workers <= 1:

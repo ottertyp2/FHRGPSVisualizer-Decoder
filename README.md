@@ -80,7 +80,9 @@ pip install -r requirements.txt
 Optional acceleration:
 
 - install a CuPy build that matches your CUDA runtime if you want GPU-accelerated FFT-heavy paths on supported Windows systems
+- on Windows without a full CUDA Toolkit install, the app can also use pip-installed NVIDIA runtime packages such as `nvidia-cuda-nvrtc-cu12`, `nvidia-cuda-runtime-cu12`, `nvidia-cufft-cu12`, and `nvidia-nvjitlink-cu12`
 - without CuPy, the app stays fully functional and falls back to multi-core CPU execution
+- if GPU runtime pieces are incomplete or fail at runtime, the app falls back to CPU execution instead of aborting the DSP step
 
 ## Running The App
 

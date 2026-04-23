@@ -8,12 +8,21 @@ from functools import lru_cache
 import importlib
 import multiprocessing
 import os
+from pathlib import Path
+import site
 import threading
 from typing import Any, Callable, Sequence, TypeVar
 
 
 T = TypeVar("T")
 U = TypeVar("U")
+
+CUDA_NAMESPACE_PACKAGES = (
+    "cuda_nvrtc",
+    "cuda_runtime",
+    "cufft",
+    "nvjitlink",
+)
 
 
 @dataclass(slots=True)
@@ -59,10 +68,69 @@ def detect_logical_cores() -> int:
     return max(1, int(logical_cores))
 
 
+def _site_roots() -> list[Path]:
+    """Return candidate site-packages roots for optional CUDA wheels."""
+
+    roots: list[Path] = []
+    for candidate in [*site.getsitepackages(), site.getusersitepackages()]:
+        path = Path(candidate)
+        if path.exists():
+            roots.append(path)
+    return roots
+
+
+def _prepend_env_path(path: Path) -> None:
+    """Prepend one directory to PATH when it is not already present."""
+
+    resolved = str(path)
+    existing = os.environ.get("PATH", "").split(os.pathsep)
+    normalized = {item.lower() for item in existing if item}
+    if resolved.lower() in normalized:
+        return
+    os.environ["PATH"] = resolved + os.pathsep + os.environ.get("PATH", "")
+
+
+@lru_cache(maxsize=1)
+def bootstrap_cuda_runtime_paths() -> dict[str, str]:
+    """Expose pip-installed NVIDIA CUDA DLL paths to the current process."""
+
+    discovered: dict[str, str] = {}
+    for root in _site_roots():
+        nvidia_root = root / "nvidia"
+        if not nvidia_root.exists():
+            continue
+        for package_name in CUDA_NAMESPACE_PACKAGES:
+            package_root = nvidia_root / package_name
+            if not package_root.exists():
+                continue
+            discovered[package_name] = str(package_root)
+            bin_dir = package_root / "bin"
+            if bin_dir.exists():
+                _prepend_env_path(bin_dir)
+                if hasattr(os, "add_dll_directory"):
+                    try:
+                        os.add_dll_directory(str(bin_dir))
+                    except (FileNotFoundError, OSError):
+                        pass
+
+    if "cuda_nvrtc" in discovered and not os.environ.get("CUDA_PATH"):
+        os.environ["CUDA_PATH"] = discovered["cuda_nvrtc"]
+    return discovered
+
+
+def _cupy_runtime_probe(cupy: Any) -> None:
+    """Run a minimal CuPy + cuFFT smoke test."""
+
+    vector = cupy.arange(8, dtype=cupy.float32)
+    _ = cupy.asnumpy(vector * vector)
+    _ = cupy.asnumpy(cupy.fft.fft(vector.astype(cupy.complex64)))
+
+
 @lru_cache(maxsize=1)
 def get_cupy_module() -> Any | None:
     """Return the optional CuPy module when installed."""
 
+    bootstrap_cuda_runtime_paths()
     try:
         return importlib.import_module("cupy")
     except Exception:
@@ -94,6 +162,17 @@ def detect_gpu_info() -> GPUInfo:
             gpu_name = str(raw_name)
     except Exception:
         gpu_name = "CUDA GPU"
+
+    try:
+        _cupy_runtime_probe(cupy)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+        return GPUInfo(
+            available=False,
+            name=gpu_name,
+            library="cupy",
+            reason=f"CuPy runtime incomplete: {first_line}",
+        )
     return GPUInfo(available=True, name=gpu_name, library="cupy", reason="CuPy/CUDA ready")
 
 

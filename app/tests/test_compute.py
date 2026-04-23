@@ -38,3 +38,31 @@ def test_split_nested_worker_budget_uses_both_levels_when_possible() -> None:
     assert outer_workers > 1
     assert inner_workers > 1
     assert outer_workers * inner_workers <= 8
+
+
+def test_detect_gpu_info_reports_runtime_probe_failures(monkeypatch) -> None:
+    class FakeRuntime:
+        @staticmethod
+        def getDeviceCount() -> int:
+            return 1
+
+        @staticmethod
+        def getDeviceProperties(_index: int) -> dict[str, str]:
+            return {"name": "Fake GPU"}
+
+    class FakeCuda:
+        runtime = FakeRuntime()
+
+    class FakeCuPy:
+        cuda = FakeCuda()
+
+    monkeypatch.setattr(compute, "get_cupy_module", lambda: FakeCuPy())
+    monkeypatch.setattr(compute, "_cupy_runtime_probe", lambda _cupy: (_ for _ in ()).throw(RuntimeError("missing cuFFT")))
+    compute.detect_gpu_info.cache_clear()
+
+    info = compute.detect_gpu_info()
+
+    assert info.available is False
+    assert info.name == "Fake GPU"
+    assert "missing cuFFT" in info.reason
+    compute.detect_gpu_info.cache_clear()

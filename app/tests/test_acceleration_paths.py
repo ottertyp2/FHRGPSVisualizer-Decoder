@@ -68,6 +68,42 @@ def test_fft_helpers_match_between_single_and_multi_worker_cpu() -> None:
     np.testing.assert_allclose(waterfall_multi, waterfall_single, rtol=1e-6, atol=1e-6)
 
 
+def test_acquisition_falls_back_to_cpu_when_gpu_build_fails(monkeypatch) -> None:
+    demo = generate_demo_signal(duration_s=0.08, doppler_hz=1500.0, code_phase_samples=180, prn=7)
+    config = AcquisitionConfig(
+        sample_rate=demo.sample_rate,
+        prn=demo.prn,
+        doppler_min=-3000,
+        doppler_max=3000,
+        doppler_step=250,
+        integration_ms=4,
+        compute_backend="gpu",
+        max_workers=1,
+        gpu_enabled=True,
+    )
+
+    monkeypatch.setattr(
+        "app.dsp.acquisition.resolve_compute_plan",
+        lambda *args, **kwargs: type(
+            "Plan",
+            (),
+            {
+                "active_backend": "gpu",
+                "selected_workers": 1,
+                "logical_cores": 8,
+                "gpu_available": True,
+                "gpu_name": "Fake GPU",
+            },
+        )(),
+    )
+    monkeypatch.setattr("app.dsp.acquisition._build_heatmap_gpu", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("GPU blew up")))
+
+    result = acquire_signal(demo.samples, config)
+
+    assert result.best_candidate.prn == demo.prn
+    assert result.heatmap.size > 0
+
+
 @pytest.mark.skipif(not detect_gpu_info().available, reason="Optional CuPy/CUDA backend not available")
 def test_acquisition_gpu_matches_cpu_when_available() -> None:
     demo = generate_demo_signal(duration_s=0.08, doppler_hz=1500.0, code_phase_samples=180, prn=7)

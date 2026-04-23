@@ -254,6 +254,7 @@ def _build_heatmap(
     config: AcquisitionConfig,
     time_vector: np.ndarray,
     code_fft: np.ndarray,
+    log_callback=None,
 ) -> tuple[np.ndarray, str, int]:
     """Build one heatmap and report the active backend and worker count."""
 
@@ -265,17 +266,24 @@ def _build_heatmap(
         prefer_gpu=True,
     )
     if plan.active_backend == "gpu":
-        return (
-            _build_heatmap_gpu(
-                selected_blocks,
-                doppler_bins,
-                config.search_center_hz,
-                time_vector,
-                code_fft,
-            ),
-            "gpu",
-            plan.selected_workers,
-        )
+        try:
+            return (
+                _build_heatmap_gpu(
+                    selected_blocks,
+                    doppler_bins,
+                    config.search_center_hz,
+                    time_vector,
+                    code_fft,
+                ),
+                "gpu",
+                plan.selected_workers,
+            )
+        except Exception as exc:
+            if log_callback:
+                log_callback(
+                    f"GPU acquisition path failed for PRN {config.prn}; falling back to CPU. "
+                    f"Reason: {str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__}."
+                )
     return (
         _build_heatmap_cpu(
             selected_blocks,
@@ -347,6 +355,7 @@ def acquire_signal(
             config,
             time_vector,
             code_fft,
+            log_callback=log_callback,
         )
         flat = heatmap.ravel()
         flat_index = int(np.argmax(flat))
@@ -404,6 +413,7 @@ def acquire_signal(
                 config,
                 time_vector,
                 code_fft,
+                log_callback=log_callback,
             )
 
     flat = heatmap.ravel()

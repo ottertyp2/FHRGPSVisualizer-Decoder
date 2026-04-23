@@ -84,13 +84,16 @@ def _benchmark_fft_core(
     if plan.active_backend == "gpu":
         cupy = get_cupy_module()
         if cupy is not None:
-            gpu_samples = cupy.asarray(fft_samples)
-            for idx in range(fft_iterations):
-                offset = (idx * fft_size) % max(fft_samples.size - fft_size + 1, 1)
-                segment = gpu_samples[offset : offset + fft_size]
-                _ = cupy.fft.fft(segment)
-            cupy.cuda.Stream.null.synchronize()
-            return int(fft_iterations * fft_size), "gpu", plan.selected_workers
+            try:
+                gpu_samples = cupy.asarray(fft_samples)
+                for idx in range(fft_iterations):
+                    offset = (idx * fft_size) % max(fft_samples.size - fft_size + 1, 1)
+                    segment = gpu_samples[offset : offset + fft_size]
+                    _ = cupy.fft.fft(segment)
+                cupy.cuda.Stream.null.synchronize()
+                return int(fft_iterations * fft_size), "gpu", plan.selected_workers
+            except Exception:
+                pass
 
     def run_one(index: int, _item: int) -> int:
         offset = (index * fft_size) % max(fft_samples.size - fft_size + 1, 1)
