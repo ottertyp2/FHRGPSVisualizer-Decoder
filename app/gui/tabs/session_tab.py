@@ -14,6 +14,8 @@ from app.models import DEFAULT_SAMPLE_RATE_HZ, DEFAULT_WINDOW_SAMPLES, FileMetad
 class SessionTab(QtWidgets.QWidget):
     """File loading, metadata, logs, and analysis control tab."""
 
+    LARGE_SAMPLE_LIMIT = 1_000_000_000_000.0
+
     load_file_requested = QtCore.Signal()
     preview_requested = QtCore.Signal()
     acquisition_requested = QtCore.Signal()
@@ -65,11 +67,17 @@ class SessionTab(QtWidgets.QWidget):
         )
         self.baseband_checkbox = QtWidgets.QCheckBox("Baseband / residual Doppler search")
         self.baseband_checkbox.setChecked(True)
-        self.start_sample_spin = QtWidgets.QSpinBox()
-        self.start_sample_spin.setRange(0, 2_000_000_000)
-        self.sample_count_spin = QtWidgets.QSpinBox()
-        self.sample_count_spin.setRange(1_000, 2_000_000_000)
-        self.sample_count_spin.setValue(DEFAULT_WINDOW_SAMPLES)
+        self.start_sample_spin = QtWidgets.QDoubleSpinBox()
+        self.start_sample_spin.setDecimals(0)
+        self.start_sample_spin.setGroupSeparatorShown(True)
+        self.start_sample_spin.setSingleStep(1_000.0)
+        self.start_sample_spin.setRange(0.0, self.LARGE_SAMPLE_LIMIT)
+        self.sample_count_spin = QtWidgets.QDoubleSpinBox()
+        self.sample_count_spin.setDecimals(0)
+        self.sample_count_spin.setGroupSeparatorShown(True)
+        self.sample_count_spin.setSingleStep(1_000.0)
+        self.sample_count_spin.setRange(1.0, self.LARGE_SAMPLE_LIMIT)
+        self.sample_count_spin.setValue(float(DEFAULT_WINDOW_SAMPLES))
         self.preload_checkbox = QtWidgets.QCheckBox("Preload full source to RAM")
         self.preload_checkbox.setChecked(True)
         self.preload_checkbox.setToolTip(
@@ -240,8 +248,15 @@ class SessionTab(QtWidgets.QWidget):
             f"Common GNSS rate hints: {hints}"
         )
         if metadata.total_samples > 0:
-            self.start_sample_spin.setMaximum(metadata.total_samples - 1)
-            self.sample_count_spin.setMaximum(metadata.total_samples)
+            total_samples = float(metadata.total_samples)
+            self.start_sample_spin.setMaximum(max(0.0, total_samples - 1.0))
+            self.sample_count_spin.setRange(1.0, total_samples)
+            self.start_sample_spin.setValue(
+                min(self.start_sample_spin.value(), self.start_sample_spin.maximum())
+            )
+            self.sample_count_spin.setValue(
+                min(self.sample_count_spin.value(), self.sample_count_spin.maximum())
+            )
         if metadata.preview_samples.size:
             time_axis = np.arange(metadata.preview_samples.size, dtype=float) / max(metadata.sample_rate_hz, 1.0)
             self.preview_curve.setData(time_axis, abs(metadata.preview_samples))

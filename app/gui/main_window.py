@@ -195,6 +195,16 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.session_tab.set_compute_status(compute_plan.status_text())
 
+    def _should_prefer_windowed_loading(self, bytes_to_load: int) -> bool:
+        """Return whether the source is large enough that windowed loading is safer."""
+
+        total_ram, avail_ram = self._memory_status()
+        if avail_ram and bytes_to_load > int(avail_ram * 0.7):
+            return True
+        if total_ram and bytes_to_load > int(total_ram * 0.5):
+            return True
+        return bytes_to_load >= 8 * 1024 ** 3
+
     def _confirm_large_ram_load(self, bytes_to_load: int) -> bool:
         """Warn before very large RAM loads."""
 
@@ -317,6 +327,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.file_metadata = metadata
         self.session.file_path = file_path
         self.session_tab.set_metadata(metadata)
+        if self.session_tab.preload_enabled() and self._should_prefer_windowed_loading(metadata.file_size_bytes):
+            self.session_tab.preload_checkbox.setChecked(False)
+            self.append_log(
+                f"{metadata.file_name} is {metadata.file_size_bytes / (1024 ** 3):.2f} GiB, "
+                "so RAM preload was turned off automatically. The app will use the selected window instead."
+            )
         self.update_ram_status()
         self.append_log(
             f"Loaded metadata for {metadata.file_name}: {metadata.total_samples:,} complex64 samples."
