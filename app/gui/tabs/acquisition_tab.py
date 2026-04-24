@@ -6,7 +6,9 @@ import numpy as np
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
+from app.dsp.acquisition import STRONG_ACQUISITION_METRIC_THRESHOLD
 from app.dsp.acquisition import acquisition_interpretation
+from app.dsp.acquisition import acquisition_result_is_plausible
 from app.dsp.utils import TOOLTIPS
 from app.models import AcquisitionResult
 
@@ -145,9 +147,9 @@ class AcquisitionTab(QtWidgets.QWidget):
         left_layout.addWidget(self.heatmap_plot, stretch=1)
 
         self.peak_hint_label = QtWidgets.QLabel(
-            "When multiple PRNs were scanned, the heatmap shows all PRN targets at once: "
-            "each row is one PRN, and brightness is the best code-phase match at that Doppler. "
-            "The local peak table below still belongs to the selected PRN."
+            "When multiple PRNs were scanned, the heatmap has exactly one row per scanned PRN. "
+            "Brightness is the best code-phase match at that Doppler; weak best-noise peaks are darkened. "
+            "Yellow marks the selected PRN, green marks plausible repeated candidates."
         )
         self.peak_hint_label.setWordWrap(True)
         left_layout.addWidget(self.peak_hint_label)
@@ -282,6 +284,51 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         return ordered_results, doppler_bins, overview
 
+    @staticmethod
+    def threshold_prn_doppler_overview(overview: np.ndarray) -> np.ndarray:
+        """Darken bins below the strong acquisition threshold for the overview plot."""
+
+        visible = np.asarray(overview, dtype=np.float32).copy()
+        visible[visible < STRONG_ACQUISITION_METRIC_THRESHOLD] = 0.0
+        return visible
+
+    @staticmethod
+    def sparse_prn_axis_ticks(
+        ordered_results: list[AcquisitionResult],
+        selected_prn: int,
+    ) -> list[tuple[float, str]]:
+        """Return readable PRN ticks without labeling all 32 rows on top of each other."""
+
+        if not ordered_results:
+            return []
+        row_count = len(ordered_results)
+        if row_count <= 16:
+            rows = set(range(row_count))
+        else:
+            step = max(1, int(np.ceil(row_count / 8.0)))
+            rows = set(range(0, row_count, step))
+            rows.add(row_count - 1)
+        selected_row = next(
+            (row for row, item in enumerate(ordered_results) if item.prn == selected_prn),
+            None,
+        )
+        if selected_row is not None:
+            rows.add(selected_row)
+        return [(row + 0.5, str(ordered_results[row].prn)) for row in sorted(rows)]
+
+    @staticmethod
+    def overview_marker_rows(
+        ordered_results: list[AcquisitionResult],
+        selected_prn: int,
+    ) -> list[int]:
+        """Return row indices that should get candidate markers in the overview plot."""
+
+        return [
+            row
+            for row, result in enumerate(ordered_results)
+            if result.prn == selected_prn or acquisition_result_is_plausible(result)
+        ]
+
     def clear_result_view(self) -> None:
         """Clear acquisition plots and tables when the source context changes."""
 
@@ -330,13 +377,14 @@ class AcquisitionTab(QtWidgets.QWidget):
         """Show one overview heatmap for all scanned PRNs."""
 
         ordered_results, doppler_bins, overview = self.build_prn_doppler_overview(results)
+        plausible_count = sum(1 for item in ordered_results if acquisition_result_is_plausible(item))
         self.heatmap_plot.setTitle(
-            f"All scanned PRNs: strongest code-phase peak vs relative Doppler ({len(ordered_results)} targets)"
+            f"PRN/Doppler overview: {len(ordered_results)} scanned PRN rows, {plausible_count} plausible candidates"
         )
         self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
         self.heatmap_plot.setLabel("left", "Scanned PRN")
         self.heatmap_plot.getAxis("left").setTicks(
-            [[(row + 0.5, str(result.prn)) for row, result in enumerate(ordered_results)]]
+            [self.sparse_prn_axis_ticks(ordered_results, selected_result.prn)]
         )
 
         if overview.size == 0 or doppler_bins.size == 0:
@@ -345,7 +393,7 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.selected_prn_line.setVisible(False)
             return
 
-        self.heatmap_image.setImage(overview, autoLevels=True)
+        self.heatmap_image.setImage(self.threshold_prn_doppler_overview(overview), autoLevels=True)
         doppler_width = float(doppler_bins[-1] - doppler_bins[0]) if doppler_bins.size > 1 else 1.0
         self.heatmap_image.setRect(
             pg.QtCore.QRectF(
@@ -360,15 +408,18 @@ class AcquisitionTab(QtWidgets.QWidget):
             (row for row, item in enumerate(ordered_results) if item.prn == selected_result.prn),
             None,
         )
+        marker_rows = set(self.overview_marker_rows(ordered_results, selected_result.prn))
         spots = []
         for row, item in enumerate(ordered_results):
+            if row not in marker_rows:
+                continue
             is_selected = item.prn == selected_result.prn
             spots.append(
                 {
                     "pos": (item.best_candidate.doppler_hz, row + 0.5),
-                    "size": 12 if is_selected else 7,
+                    "size": 12 if is_selected else 8,
                     "pen": pg.mkPen("#111111", width=1),
-                    "brush": pg.mkBrush("#ffd43b" if is_selected else "#f8f9fa"),
+                    "brush": pg.mkBrush("#ffd43b" if is_selected else "#51cf66"),
                 }
             )
         self.peak_scatter.setData(spots=spots)
@@ -416,14 +467,14 @@ class AcquisitionTab(QtWidgets.QWidget):
         if len(results) > 1:
             self.selected_prn_label.setText(
                 f"Selected PRN {result.prn}: the yellow row/marker belongs to this satellite candidate. "
-                "The overview heatmap compares all scanned PRNs at once; local peaks, tracking start values, and evidence below still belong to the selected PRN."
+                "The overview heatmap compares one row per scanned PRN; local peaks, tracking start values, and evidence below still belong to the selected PRN."
             )
         else:
             self.selected_prn_label.setText(
                 f"Selected PRN {result.prn}: the heatmap, local peaks, tracking start values, and evidence below all belong to this satellite candidate."
             )
         overview_note = (
-            f" Overview heatmap compares {len(results)} scanned PRNs by their strongest code-phase peak per Doppler bin."
+            f" Overview heatmap compares {len(results)} scanned PRN rows by their strongest code-phase peak per Doppler bin."
             if len(results) > 1
             else ""
         )
@@ -483,8 +534,11 @@ class AcquisitionTab(QtWidgets.QWidget):
                     f"Interpretation label: {acquisition_interpretation(result)}",
                     "",
                     "How to read this:",
-                    "- In the all-PRN overview, each row is a scanned PRN and brightness is the best code-phase match at that Doppler.",
-                    "- The yellow row/marker is the selected PRN. The local peak table gives the actual code-phase alternatives for that PRN.",
+                    "- In the all-PRN overview, each row is one scanned PRN; the plot does not create more rows than the scan list.",
+                    f"- Bins below the strong metric threshold ({STRONG_ACQUISITION_METRIC_THRESHOLD:.1f}) are darkened so noise maxima do not look like targets.",
+                    "- Yellow marks the selected PRN. Green marks other repeated, strong acquisition candidates.",
+                    "- Best peaks from weak rows are not drawn as target markers.",
+                    "- The local peak table gives the actual code-phase alternatives for the selected PRN.",
                     "- The brighter the heatmap peak, the better the local PRN matches the signal.",
                     "- Search frequency is the actual tone removed in the sample domain.",
                     "- Relative Doppler is the offset around the chosen IF / search center.",

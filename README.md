@@ -148,7 +148,7 @@ The sample-rate field is freely editable, so you can enter exact recorder values
    For the latest real sample, start near `6.061 MSa/s` and use `Auto Detect Capture` to refine nearby recorder-clock offsets.
 4. Click `Preview` to inspect a bounded window before committing to heavier DSP steps.
 5. Go to `Acquisition` and run either a single-PRN acquisition or a PRN scan.
-6. Click one PRN row to make that satellite candidate active; after a scan, the heatmap compares all scanned PRNs while the evidence panel stays focused on the selected PRN.
+6. Click one PRN row to make that satellite candidate active; after a scan, the heatmap compares one row per scanned PRN while the evidence panel stays focused on the selected PRN.
 7. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
 8. Track the highlighted PRN once acquisition shows a repeated candidate; use the loop controls when you want to experiment with DLL/PLL behavior.
 9. Decode bits and inspect LNAV framing in `Bits / Navigation`; switch bit source if the prompt phase looks rotated.
@@ -194,7 +194,7 @@ This tab is the main diagnosis surface for initial satellite detection:
 - sample-rate hypothesis ranking
 - IF / center-frequency sweep ranking
 
-After a PRN scan, the heatmap becomes a PRN-vs-Doppler overview: each row is one scanned PRN, and brightness means that some code phase matched well at that Doppler. The yellow marker shows the selected PRN's best Doppler. The local peak table below still lists alternative code/Doppler alignments for that selected PRN, while the satellite table ranks the PRNs.
+After a PRN scan, the heatmap becomes a PRN-vs-Doppler overview: each row is one scanned PRN, and brightness means that some code phase matched well at that Doppler. Weak bins below the strong-acquisition threshold are darkened so every PRN's best noise peak does not look like a satellite. The yellow marker shows the selected PRN's best Doppler; green markers show other repeated, strong acquisition candidates. The local peak table below still lists alternative code/Doppler alignments for that selected PRN, while the satellite table ranks the PRNs.
 
 The app deliberately treats repeated evidence across segments as more meaningful than a single high peak.
 

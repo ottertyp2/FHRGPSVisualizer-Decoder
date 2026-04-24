@@ -121,6 +121,30 @@ def test_prn_doppler_overview_collapses_each_prn_to_best_code_phase() -> None:
     )
 
 
+def test_prn_doppler_overview_does_not_mark_every_noise_peak() -> None:
+    weak = _make_acquisition_result(1, metric=2.0)
+    strong = _make_acquisition_result(2, metric=10.0)
+    selected_weak = _make_acquisition_result(3, metric=2.0)
+    ordered = [weak, strong, selected_weak]
+
+    visible = AcquisitionTab.threshold_prn_doppler_overview(
+        np.asarray([[1.0, 5.9, 6.0, 10.0]], dtype=np.float32)
+    )
+    marker_rows = AcquisitionTab.overview_marker_rows(ordered, selected_prn=3)
+
+    np.testing.assert_allclose(visible, [[0.0, 0.0, 6.0, 10.0]])
+    assert marker_rows == [1, 2]
+
+
+def test_prn_doppler_overview_uses_sparse_axis_labels_for_full_scan() -> None:
+    results = [_make_acquisition_result(prn) for prn in range(1, 33)]
+
+    ticks = AcquisitionTab.sparse_prn_axis_ticks(results, selected_prn=32)
+
+    assert len(ticks) < 16
+    assert ticks[-1] == (31.5, "32")
+
+
 def test_session_tab_accepts_large_file_sample_ranges() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
@@ -206,7 +230,7 @@ def test_per_prn_views_keep_all_acquisition_candidates_selectable() -> None:
     assert window.tracking_tab.prn_combo.findData(1) >= 0
     assert window.tracking_tab.prn_combo.findData(2) >= 0
     assert window.acquisition_tab.satellite_table.item(0, 6).text() == "tracked"
-    assert "Overview heatmap compares 2 scanned PRNs" in window.acquisition_tab.summary_label.text()
+    assert "Overview heatmap compares 2 scanned PRN rows" in window.acquisition_tab.summary_label.text()
     assert "Selected PRN: 1" in window.learning_tab.selected_label.text()
 
     window.set_selected_prn(2)
