@@ -40,6 +40,11 @@ class NavigationTab(QtWidgets.QWidget):
         self.task_status_label = QtWidgets.QLabel("Navigation decoder idle.")
         self.task_status_label.setWordWrap(True)
         layout.addWidget(self.task_status_label)
+        self.stage_hint_label = QtWidgets.QLabel(
+            "Navigation decoding uses the tracked PRN only: 1 ms prompt values are summed into 20 ms LNAV bit decisions."
+        )
+        self.stage_hint_label.setWordWrap(True)
+        layout.addWidget(self.stage_hint_label)
 
         self.task_progress_bar = QtWidgets.QProgressBar()
         self.task_progress_bar.setRange(0, 100)
@@ -54,10 +59,12 @@ class NavigationTab(QtWidgets.QWidget):
         layout.addWidget(self.evidence_text)
 
         self.prompt_plot = pg.PlotWidget(title="1 ms prompt values")
+        self.prompt_plot.setToolTip("These are the per-millisecond despread prompt values before 20 ms bit summing.")
         self.prompt_curve = self.prompt_plot.plot(pen="c")
         layout.addWidget(self.prompt_plot, stretch=1)
 
         self.bit_plot = pg.PlotWidget(title="20 ms bit accumulations")
+        self.bit_plot.setToolTip("Each point is the sum of 20 prompt values; its sign becomes one navigation bit.")
         self.bit_curve = self.bit_plot.plot(pen=None, symbol="o", symbolBrush="y")
         layout.addWidget(self.bit_plot, stretch=1)
 
@@ -114,7 +121,6 @@ class NavigationTab(QtWidgets.QWidget):
     ) -> None:
         """Refresh the bit and LNAV views."""
 
-        self.set_available_prns([prn], prn)
         self.summary_label.setText(
             f"PRN {prn}: bit offset {bit_result.best_offset_ms} ms, "
             f"{bit_result.bit_values.size} hard decisions, "

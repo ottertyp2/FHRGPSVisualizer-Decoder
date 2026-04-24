@@ -42,6 +42,11 @@ class TrackingTab(QtWidgets.QWidget):
         self.task_status_label = QtWidgets.QLabel("Tracking idle.")
         self.task_status_label.setWordWrap(True)
         layout.addWidget(self.task_status_label)
+        self.stage_hint_label = QtWidgets.QLabel(
+            "Tracking starts from the selected acquisition peak and then updates Doppler and code phase every millisecond."
+        )
+        self.stage_hint_label.setWordWrap(True)
+        layout.addWidget(self.stage_hint_label)
 
         self.task_progress_bar = QtWidgets.QProgressBar()
         self.task_progress_bar.setRange(0, 100)
@@ -56,17 +61,20 @@ class TrackingTab(QtWidgets.QWidget):
         layout.addWidget(self.evidence_text)
 
         self.prompt_plot = pg.PlotWidget(title="Prompt I/Q")
+        self.prompt_plot.setToolTip("Prompt I/Q is one complex value per 1 ms after carrier wipeoff and PRN despreading.")
         self.prompt_i_curve = self.prompt_plot.plot(pen="c", name="I")
         self.prompt_q_curve = self.prompt_plot.plot(pen="m", name="Q")
         layout.addWidget(self.prompt_plot, stretch=1)
 
         self.mag_plot = pg.PlotWidget(title="Early / Prompt / Late magnitude")
+        self.mag_plot.setToolTip("Prompt should usually sit above Early/Late when the code phase is aligned.")
         self.early_curve = self.mag_plot.plot(pen="r")
         self.prompt_mag_curve = self.mag_plot.plot(pen="y")
         self.late_curve = self.mag_plot.plot(pen="g")
         layout.addWidget(self.mag_plot, stretch=1)
 
         self.error_plot = pg.PlotWidget(title="Code and carrier error")
+        self.error_plot.setToolTip("Code error steers PRN timing; carrier error steers residual Doppler/phase.")
         self.code_error_curve = self.error_plot.plot(pen="w")
         self.carrier_error_curve = self.error_plot.plot(pen="c")
         layout.addWidget(self.error_plot, stretch=1)
@@ -125,7 +133,6 @@ class TrackingTab(QtWidgets.QWidget):
         """Refresh all tracking plots."""
 
         time_ms = state.times_s * 1_000.0
-        self.set_available_prns([state.prn], state.prn)
         self.status_label.setText(
             f"PRN {state.prn} tracking {'locked' if state.lock_detected else 'not locked'} "
             f"after {state.times_s.size} ms."

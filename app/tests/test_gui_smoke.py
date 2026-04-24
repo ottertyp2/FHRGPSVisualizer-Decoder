@@ -6,7 +6,53 @@ import numpy as np
 from PySide6 import QtWidgets
 
 from app.gui.main_window import MainWindow
-from app.models import DEFAULT_SAMPLE_RATE_HZ, FileMetadata
+from app.models import (
+    DEFAULT_SAMPLE_RATE_HZ,
+    AcquisitionCandidate,
+    AcquisitionResult,
+    FileMetadata,
+    TrackingState,
+)
+
+
+def _make_acquisition_result(prn: int, metric: float = 9.0) -> AcquisitionResult:
+    candidate = AcquisitionCandidate(
+        prn=prn,
+        doppler_hz=500.0 * prn,
+        carrier_frequency_hz=500.0 * prn,
+        code_phase_samples=100 * prn,
+        metric=metric,
+    )
+    return AcquisitionResult(
+        prn=prn,
+        sample_rate_hz=1_000_000.0,
+        search_center_hz=0.0,
+        doppler_bins_hz=np.asarray([-500.0, 0.0, 500.0], dtype=np.float32),
+        code_phases_samples=np.asarray([0, 1, 2], dtype=np.int32),
+        heatmap=np.ones((3, 3), dtype=np.float32) * metric,
+        best_candidate=candidate,
+        consistent_segments=4,
+        consistency_score=metric * 4.0,
+    )
+
+
+def _make_tracking_state(prn: int) -> TrackingState:
+    values = np.ones(8, dtype=np.float32)
+    return TrackingState(
+        prn=prn,
+        times_s=np.arange(8, dtype=np.float32) * 1e-3,
+        prompt_i=values.copy(),
+        prompt_q=np.zeros(8, dtype=np.float32),
+        early_mag=values * 0.8,
+        prompt_mag=values,
+        late_mag=values * 0.8,
+        code_error=np.zeros(8, dtype=np.float32),
+        carrier_error=np.zeros(8, dtype=np.float32),
+        doppler_est_hz=values * 500.0,
+        code_freq_est_hz=values * 1_023_000.0,
+        lock_metric=values * 2.0,
+        lock_detected=True,
+    )
 
 
 def test_main_window_smoke() -> None:
@@ -92,3 +138,25 @@ def test_windowed_deep_acquisition_uses_the_selected_window() -> None:
     acquisition_samples = window.load_acquisition_samples()
 
     np.testing.assert_allclose(acquisition_samples, selected_window)
+
+
+def test_per_prn_views_keep_all_acquisition_candidates_selectable() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    window.acquisition_results_by_prn = {
+        1: _make_acquisition_result(1, metric=10.0),
+        2: _make_acquisition_result(2, metric=8.0),
+    }
+    window.tracking_results_by_prn[1] = _make_tracking_state(1)
+    window.selected_prn = 1
+
+    window.refresh_satellite_views()
+
+    assert window.tracking_tab.prn_combo.findData(1) >= 0
+    assert window.tracking_tab.prn_combo.findData(2) >= 0
+    assert window.acquisition_tab.satellite_table.item(0, 6).text() == "tracked"
+
+    window.set_selected_prn(2)
+
+    assert "Selected PRN 2" in window.acquisition_tab.selected_prn_label.text()
+    assert window.acquisition_tab.prn_spin.value() == 2

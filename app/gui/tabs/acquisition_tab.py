@@ -107,16 +107,34 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
+        self.selected_prn_label = QtWidgets.QLabel("Selected PRN: none")
+        self.selected_prn_label.setWordWrap(True)
+        layout.addWidget(self.selected_prn_label)
+        self.stage_hint_label = QtWidgets.QLabel(
+            "Acquisition tries one PRN code at many Doppler bins and code phases. "
+            "A bright heatmap peak means this PRN, this Doppler, and this code timing match the recording best."
+        )
+        self.stage_hint_label.setWordWrap(True)
+        layout.addWidget(self.stage_hint_label)
+
         splitter = QtWidgets.QSplitter()
         splitter.setOrientation(QtCore.Qt.Horizontal)
 
         left_panel = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left_panel)
         self.heatmap_plot = pg.PlotWidget(title="Code phase vs Doppler")
+        self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.heatmap_plot.setLabel("left", "Code phase", units="samples")
         self.heatmap_image = pg.ImageItem()
         self.heatmap_plot.addItem(self.heatmap_image)
         left_layout.addWidget(self.heatmap_plot, stretch=1)
 
+        self.peak_hint_label = QtWidgets.QLabel(
+            "Local peaks: alternative alignments inside the same selected PRN heatmap. "
+            "The satellite list on the right compares different PRNs."
+        )
+        self.peak_hint_label.setWordWrap(True)
+        left_layout.addWidget(self.peak_hint_label)
         self.candidate_table = QtWidgets.QTableWidget(0, 5)
         self.candidate_table.setHorizontalHeaderLabels(["PRN", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Metric"])
         self.candidate_table.horizontalHeader().setStretchLastSection(True)
@@ -138,8 +156,25 @@ class AcquisitionTab(QtWidgets.QWidget):
         right_layout.addWidget(self.center_table, stretch=1)
 
         right_layout.addWidget(QtWidgets.QLabel("Detected / inspected satellites"))
-        self.satellite_table = QtWidgets.QTableWidget(0, 7)
-        self.satellite_table.setHorizontalHeaderLabels(["PRN", "Metric", "Consistent segs", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Interpretation"])
+        self.satellite_hint_label = QtWidgets.QLabel(
+            "Click a PRN row to inspect that satellite candidate. Then use Track Highlighted PRN to follow its code and carrier over time."
+        )
+        self.satellite_hint_label.setWordWrap(True)
+        right_layout.addWidget(self.satellite_hint_label)
+        self.satellite_table = QtWidgets.QTableWidget(0, 9)
+        self.satellite_table.setHorizontalHeaderLabels(
+            [
+                "PRN",
+                "Metric",
+                "Consistent segs",
+                "Search freq [Hz]",
+                "Rel. Doppler [Hz]",
+                "Code phase",
+                "Tracking",
+                "Navigation",
+                "Interpretation",
+            ]
+        )
         self.satellite_table.horizontalHeader().setStretchLastSection(True)
         right_layout.addWidget(self.satellite_table, stretch=1)
 
@@ -182,9 +217,20 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         self.task_progress_bar.setValue(max(0, min(100, int(value))))
 
-    def update_result(self, result: AcquisitionResult, total_results: list[AcquisitionResult] | None = None) -> None:
+    def update_result(
+        self,
+        result: AcquisitionResult,
+        total_results: list[AcquisitionResult] | None = None,
+        tracked_prns: set[int] | None = None,
+        decoded_prns: set[int] | None = None,
+    ) -> None:
         """Populate the heatmap and candidate table."""
 
+        tracked_prns = tracked_prns or set()
+        decoded_prns = decoded_prns or set()
+        self.selected_prn_label.setText(
+            f"Selected PRN {result.prn}: the heatmap, local peaks, tracking start values, and evidence below all belong to this satellite candidate."
+        )
         self.summary_label.setText(
             f"Best peak: PRN {result.best_candidate.prn}, "
             f"search frequency {result.best_candidate.carrier_frequency_hz:.1f} Hz, "
@@ -195,6 +241,9 @@ class AcquisitionTab(QtWidgets.QWidget):
             f"consistent segments {result.consistent_segments}, "
             f"interpretation {acquisition_interpretation(result)}. "
             "A strong, repeated peak across segments is only an acquisition candidate; tracking and navigation evidence are needed before treating it as a satellite."
+        )
+        self.heatmap_plot.setTitle(
+            f"PRN {result.prn} acquisition heatmap: code phase vs relative Doppler"
         )
         self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
         rect = pg.QtCore.QRectF(
@@ -213,17 +262,22 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.candidate_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
 
         results = total_results or [result]
+        self.satellite_table.blockSignals(True)
         self.satellite_table.setRowCount(len(results))
         for row, sat_result in enumerate(results):
             candidate = sat_result.best_candidate
             interpretation = acquisition_interpretation(sat_result)
+            tracking_status = "tracked" if sat_result.prn in tracked_prns else "-"
+            navigation_status = "decoded" if sat_result.prn in decoded_prns else "-"
             self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
             self.satellite_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
             self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(sat_result.consistent_segments)))
             self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.carrier_frequency_hz:.1f}"))
             self.satellite_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:+.1f}"))
             self.satellite_table.setItem(row, 5, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
-            self.satellite_table.setItem(row, 6, QtWidgets.QTableWidgetItem(interpretation))
+            self.satellite_table.setItem(row, 6, QtWidgets.QTableWidgetItem(tracking_status))
+            self.satellite_table.setItem(row, 7, QtWidgets.QTableWidgetItem(navigation_status))
+            self.satellite_table.setItem(row, 8, QtWidgets.QTableWidgetItem(interpretation))
 
         self.evidence_text.setPlainText(
             "\n".join(
@@ -262,6 +316,7 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         if results:
             self.satellite_table.selectRow(next((i for i, item in enumerate(results) if item.prn == result.prn), 0))
+        self.satellite_table.blockSignals(False)
 
     def update_sweep_results(self, sweep_entries) -> None:
         """Show ranked IF / search-center hypotheses."""

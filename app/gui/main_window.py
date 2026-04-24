@@ -119,6 +119,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.selected_prn = None
         self.pending_navigation_prn = None
         self.acquisition_tab.summary_label.setText("No acquisition result yet. Run one PRN or scan multiple PRNs.")
+        self.acquisition_tab.selected_prn_label.setText("Selected PRN: none")
         self.acquisition_tab.candidate_table.setRowCount(0)
         self.acquisition_tab.rate_table.setRowCount(0)
         self.acquisition_tab.center_table.setRowCount(0)
@@ -546,7 +547,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 key=acquisition_rank_key,
                 reverse=True,
             )
-            self.acquisition_tab.update_result(acquisition, all_results)
+            self.acquisition_tab.update_result(
+                acquisition,
+                all_results,
+                tracked_prns=set(self.tracking_results_by_prn),
+                decoded_prns=set(self.nav_results_by_prn),
+            )
         self.tracking_tab.set_available_prns(self.available_prns(), self.selected_prn)
         self.navigation_tab.set_available_prns(self.available_prns(with_tracking=True), self.selected_prn)
         if tracking is not None:
