@@ -32,6 +32,7 @@ def test_tracking_and_nav_pipeline() -> None:
     tracking = track_signal(demo.samples, session, acquisition)
     assert tracking.prompt_i.size >= 200
     assert tracking.prompt_mag.mean() > 0.01
+    assert tracking.lock_detected
     bit_result = extract_navigation_bits(tracking)
     assert bit_result.bit_values.size >= 5
     nav_result = decode_navigation_bits(bit_result)

@@ -72,3 +72,23 @@ def test_inspect_file_disables_preload_for_oversized_sources(monkeypatch) -> Non
 
     assert not window.session_tab.preload_enabled()
     assert "turned off automatically" in window.session_tab.log_edit.toPlainText()
+
+
+def test_windowed_deep_acquisition_uses_the_selected_window() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    selected_window = (np.arange(50, dtype=np.float32) + 1j * np.arange(50, dtype=np.float32)).astype(np.complex64)
+    window.current_samples = selected_window
+    window.current_samples_signature = ("memory", False, 10, selected_window.size)
+    window.session.file_path = "memory"
+    window.session_tab.sample_rate_spin.setValue(1_000.0)
+    window.session_tab.start_sample_spin.setValue(10)
+    window.session_tab.sample_count_spin.setValue(selected_window.size)
+    window.session_tab.preload_checkbox.setChecked(True)
+    window.session_tab.preload_checkbox.setChecked(False)
+    window.acquisition_tab.integration_spin.setValue(20)
+    window.acquisition_tab.segment_count_spin.setValue(4)
+
+    acquisition_samples = window.load_acquisition_samples()
+
+    np.testing.assert_allclose(acquisition_samples, selected_window)

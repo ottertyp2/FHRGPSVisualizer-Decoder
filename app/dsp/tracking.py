@@ -131,7 +131,13 @@ def _track_blocks(
 
     valid = valid_count
     times_s = np.arange(valid, dtype=np.float32) * 1e-3
-    lock_detected = bool(np.median(lock_metric[max(0, valid - 50) : valid]) > 1.5) if valid else False
+    lock_detected = False
+    if valid:
+        phase_lock = float(np.median(lock_metric[max(0, valid - 50) : valid])) > 1.5
+        prompt_median = float(np.median(prompt_mag[:valid]))
+        side_median = float(np.median((early_mag[:valid] + late_mag[:valid]) * 0.5))
+        code_peak_lock = valid >= 200 and prompt_median > side_median * 1.15
+        lock_detected = bool(phase_lock or code_peak_lock)
 
     if log_callback:
         state = "locked" if lock_detected else "not locked"

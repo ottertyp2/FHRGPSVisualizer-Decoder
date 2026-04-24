@@ -32,7 +32,7 @@ class SessionTab(QtWidgets.QWidget):
         info_label = QtWidgets.QLabel(
             "Load a complex64 IQ file or generate a demo signal, then inspect a sample window. "
             "The default workflow starts at 6.061 MSa/s complex baseband IQ, and the sample-rate field is freely editable "
-            "(for example 6061000 Sa/s for 6.061 MHz)."
+            "(for example 6060606 Sa/s for an X310 200e6/33 recording)."
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -49,7 +49,7 @@ class SessionTab(QtWidgets.QWidget):
         self.sample_rate_spin.setSuffix(" Sa/s")
         self.sample_rate_spin.setToolTip(
             "Exact sample rate in samples per second. "
-            "This field is editable, for example 6061000 Sa/s for a 6.061 MHz recording."
+            "This field is editable, for example 6060606 Sa/s for an X310 200e6/33 recording."
         )
         self.center_frequency_spin = QtWidgets.QDoubleSpinBox()
         self.center_frequency_spin.setRange(0.0, 10_000_000_000.0)

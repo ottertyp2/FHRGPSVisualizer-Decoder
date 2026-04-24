@@ -143,6 +143,8 @@ class TrackingTab(QtWidgets.QWidget):
             [
                 "Median prompt magnitude: "
                 f"{float(np.median(state.prompt_mag)) if state.prompt_mag.size else 0.0:.4f}",
+                "Prompt vs early/late ratio: "
+                f"{float(np.median(state.prompt_mag) / max(np.median((state.early_mag + state.late_mag) * 0.5), 1e-12)) if state.prompt_mag.size else 0.0:.2f}",
                 "Median lock metric: "
                 f"{float(np.median(state.lock_metric)) if state.lock_metric.size else 0.0:.2f}",
                 f"Tracking interpretation: {'carrier/code alignment looks stable' if state.lock_detected else 'alignment is still weak or noisy'}.",

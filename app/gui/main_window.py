@@ -502,13 +502,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_session_from_ui()
         samples_per_ms = int(round(self.session.sample_rate * 1e-3))
         count = max(samples_per_ms, samples_per_ms * int(self.session.integration_ms))
-        if self.session_tab.preload_enabled() and (
-            self.session.spread_acquisition_blocks or self.session.acquisition_segment_count > 1
-        ):
-            return self.current_samples if self.current_samples.size else self.ensure_samples()
         window = self.current_window_samples()
         if window.size == 0:
             window = self.ensure_samples()
+        if self.session.spread_acquisition_blocks or self.session.acquisition_segment_count > 1:
+            return window
         return window[:count]
 
     def preview_selected_window(self) -> None:
