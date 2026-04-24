@@ -128,6 +128,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.acquisition_tab.center_table.setRowCount(0)
         self.acquisition_tab.satellite_table.setRowCount(0)
         self.acquisition_tab.evidence_text.clear()
+        self.acquisition_tab.clear_result_view()
         self.acquisition_tab.set_task_message("Acquisition idle.")
         self.acquisition_tab.set_task_progress(0)
         self.tracking_tab.set_available_prns([])

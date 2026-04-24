@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from PySide6 import QtWidgets
 
+from app.gui.tabs.acquisition_tab import AcquisitionTab
 from app.gui.main_window import MainWindow
 from app.models import (
     DEFAULT_SAMPLE_RATE_HZ,
@@ -84,6 +85,40 @@ def test_acquisition_scan_prn_list_parser() -> None:
     window.acquisition_tab.scan_prns_edit.setText("33")
     with pytest.raises(ValueError):
         window.acquisition_tab.selected_scan_prns()
+
+
+def test_prn_doppler_overview_collapses_each_prn_to_best_code_phase() -> None:
+    first = _make_acquisition_result(1)
+    first.heatmap = np.asarray(
+        [
+            [1.0, 2.0, 3.0],
+            [2.0, 2.0, 2.0],
+            [9.0, 1.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    second = _make_acquisition_result(2)
+    second.heatmap = np.asarray(
+        [
+            [1.0, 1.0, 1.0],
+            [7.0, 1.0, 1.0],
+            [2.0, 2.0, 2.0],
+        ],
+        dtype=np.float32,
+    )
+
+    ordered, dopplers, overview = AcquisitionTab.build_prn_doppler_overview([second, first])
+
+    assert [result.prn for result in ordered] == [1, 2]
+    np.testing.assert_allclose(dopplers, [-500.0, 0.0, 500.0])
+    np.testing.assert_allclose(
+        overview[0],
+        np.max(first.heatmap, axis=1) / np.mean(first.heatmap),
+    )
+    np.testing.assert_allclose(
+        overview[1],
+        np.max(second.heatmap, axis=1) / np.mean(second.heatmap),
+    )
 
 
 def test_session_tab_accepts_large_file_sample_ranges() -> None:
@@ -171,6 +206,7 @@ def test_per_prn_views_keep_all_acquisition_candidates_selectable() -> None:
     assert window.tracking_tab.prn_combo.findData(1) >= 0
     assert window.tracking_tab.prn_combo.findData(2) >= 0
     assert window.acquisition_tab.satellite_table.item(0, 6).text() == "tracked"
+    assert "Overview heatmap compares 2 scanned PRNs" in window.acquisition_tab.summary_label.text()
     assert "Selected PRN: 1" in window.learning_tab.selected_label.text()
 
     window.set_selected_prn(2)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
@@ -127,16 +128,26 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         left_panel = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left_panel)
-        self.heatmap_plot = pg.PlotWidget(title="Code phase vs Doppler")
+        self.heatmap_plot = pg.PlotWidget(title="PRN / code phase vs Doppler")
         self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
         self.heatmap_plot.setLabel("left", "Code phase", units="samples")
-        self.heatmap_image = pg.ImageItem()
+        self.heatmap_image = pg.ImageItem(axisOrder="row-major")
         self.heatmap_plot.addItem(self.heatmap_image)
+        self.peak_scatter = pg.ScatterPlotItem()
+        self.heatmap_plot.addItem(self.peak_scatter)
+        self.selected_prn_line = pg.InfiniteLine(
+            angle=0,
+            movable=False,
+            pen=pg.mkPen("#ffd43b", width=2),
+        )
+        self.selected_prn_line.setVisible(False)
+        self.heatmap_plot.addItem(self.selected_prn_line)
         left_layout.addWidget(self.heatmap_plot, stretch=1)
 
         self.peak_hint_label = QtWidgets.QLabel(
-            "Local peaks: alternative alignments inside the same selected PRN heatmap. "
-            "The satellite list on the right compares different PRNs."
+            "When multiple PRNs were scanned, the heatmap shows all PRN targets at once: "
+            "each row is one PRN, and brightness is the best code-phase match at that Doppler. "
+            "The local peak table below still belongs to the selected PRN."
         )
         self.peak_hint_label.setWordWrap(True)
         left_layout.addWidget(self.peak_hint_label)
@@ -235,6 +246,141 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         return self.parse_prn_list(self.scan_prns_edit.text())
 
+    @staticmethod
+    def build_prn_doppler_overview(
+        results: list[AcquisitionResult],
+    ) -> tuple[list[AcquisitionResult], np.ndarray, np.ndarray]:
+        """Collapse per-PRN code-phase heatmaps into one PRN-vs-Doppler overview."""
+
+        ordered_results = sorted(results, key=lambda item: item.prn)
+        if not ordered_results:
+            return [], np.empty(0, dtype=np.float32), np.empty((0, 0), dtype=np.float32)
+
+        doppler_values = sorted(
+            {
+                round(float(doppler), 6)
+                for result in ordered_results
+                for doppler in result.doppler_bins_hz
+            }
+        )
+        doppler_bins = np.asarray(doppler_values, dtype=np.float32)
+        overview = np.zeros((len(ordered_results), doppler_bins.size), dtype=np.float32)
+        doppler_index = {value: index for index, value in enumerate(doppler_values)}
+
+        for row, result in enumerate(ordered_results):
+            heatmap = np.asarray(result.heatmap, dtype=np.float32)
+            if heatmap.ndim != 2 or heatmap.size == 0 or result.doppler_bins_hz.size == 0:
+                continue
+            row_count = min(heatmap.shape[0], result.doppler_bins_hz.size)
+            if row_count <= 0:
+                continue
+            usable_heatmap = heatmap[:row_count]
+            noise_floor = float(np.mean(usable_heatmap) + 1e-12)
+            doppler_profile = np.max(usable_heatmap, axis=1) / noise_floor
+            for doppler, metric in zip(result.doppler_bins_hz[:row_count], doppler_profile):
+                overview[row, doppler_index[round(float(doppler), 6)]] = float(metric)
+
+        return ordered_results, doppler_bins, overview
+
+    def clear_result_view(self) -> None:
+        """Clear acquisition plots and tables when the source context changes."""
+
+        self.heatmap_plot.setTitle("PRN / code phase vs Doppler")
+        self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.heatmap_plot.setLabel("left", "Code phase", units="samples")
+        self.heatmap_plot.getAxis("left").setTicks(None)
+        self.heatmap_image.setImage(np.zeros((1, 1), dtype=np.float32), autoLevels=False)
+        self.peak_scatter.setData(spots=[])
+        self.selected_prn_line.setVisible(False)
+
+    def _update_single_prn_heatmap(self, result: AcquisitionResult) -> None:
+        """Show the full code-phase search surface for one selected PRN."""
+
+        self.heatmap_plot.setTitle(
+            f"PRN {result.prn} acquisition heatmap: code phase vs relative Doppler"
+        )
+        self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.heatmap_plot.setLabel("left", "Code phase", units="samples")
+        self.heatmap_plot.getAxis("left").setTicks(None)
+        self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
+        rect = pg.QtCore.QRectF(
+            float(result.doppler_bins_hz[0]),
+            float(result.code_phases_samples[0]),
+            float(result.doppler_bins_hz[-1] - result.doppler_bins_hz[0]) if result.doppler_bins_hz.size > 1 else 1.0,
+            float(result.code_phases_samples[-1] - result.code_phases_samples[0]) if result.code_phases_samples.size > 1 else 1.0,
+        )
+        self.heatmap_image.setRect(rect)
+        self.peak_scatter.setData(
+            spots=[
+                {
+                    "pos": (result.best_candidate.doppler_hz, result.best_candidate.code_phase_samples),
+                    "size": 10,
+                    "pen": pg.mkPen("#111111", width=1),
+                    "brush": pg.mkBrush("#ffd43b"),
+                }
+            ]
+        )
+        self.selected_prn_line.setVisible(False)
+
+    def _update_prn_doppler_overview(
+        self,
+        selected_result: AcquisitionResult,
+        results: list[AcquisitionResult],
+    ) -> None:
+        """Show one overview heatmap for all scanned PRNs."""
+
+        ordered_results, doppler_bins, overview = self.build_prn_doppler_overview(results)
+        self.heatmap_plot.setTitle(
+            f"All scanned PRNs: strongest code-phase peak vs relative Doppler ({len(ordered_results)} targets)"
+        )
+        self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.heatmap_plot.setLabel("left", "Scanned PRN")
+        self.heatmap_plot.getAxis("left").setTicks(
+            [[(row + 0.5, str(result.prn)) for row, result in enumerate(ordered_results)]]
+        )
+
+        if overview.size == 0 or doppler_bins.size == 0:
+            self.heatmap_image.setImage(np.zeros((1, 1), dtype=np.float32), autoLevels=False)
+            self.peak_scatter.setData(spots=[])
+            self.selected_prn_line.setVisible(False)
+            return
+
+        self.heatmap_image.setImage(overview, autoLevels=True)
+        doppler_width = float(doppler_bins[-1] - doppler_bins[0]) if doppler_bins.size > 1 else 1.0
+        self.heatmap_image.setRect(
+            pg.QtCore.QRectF(
+                float(doppler_bins[0]),
+                0.0,
+                doppler_width,
+                float(len(ordered_results)),
+            )
+        )
+
+        selected_row = next(
+            (row for row, item in enumerate(ordered_results) if item.prn == selected_result.prn),
+            None,
+        )
+        spots = []
+        for row, item in enumerate(ordered_results):
+            is_selected = item.prn == selected_result.prn
+            spots.append(
+                {
+                    "pos": (item.best_candidate.doppler_hz, row + 0.5),
+                    "size": 12 if is_selected else 7,
+                    "pen": pg.mkPen("#111111", width=1),
+                    "brush": pg.mkBrush("#ffd43b" if is_selected else "#f8f9fa"),
+                }
+            )
+        self.peak_scatter.setData(spots=spots)
+        if selected_row is None:
+            self.selected_prn_line.setVisible(False)
+        else:
+            self.selected_prn_line.setValue(selected_row + 0.5)
+            self.selected_prn_line.setVisible(True)
+        self.heatmap_plot.setYRange(0.0, float(len(ordered_results)), padding=0.02)
+        if doppler_bins.size > 1:
+            self.heatmap_plot.setXRange(float(doppler_bins[0]), float(doppler_bins[-1]), padding=0.02)
+
     def _emit_selection_changed(self) -> None:
         items = self.satellite_table.selectedItems()
         if not items:
@@ -266,8 +412,20 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         tracked_prns = tracked_prns or set()
         decoded_prns = decoded_prns or set()
-        self.selected_prn_label.setText(
-            f"Selected PRN {result.prn}: the heatmap, local peaks, tracking start values, and evidence below all belong to this satellite candidate."
+        results = total_results or [result]
+        if len(results) > 1:
+            self.selected_prn_label.setText(
+                f"Selected PRN {result.prn}: the yellow row/marker belongs to this satellite candidate. "
+                "The overview heatmap compares all scanned PRNs at once; local peaks, tracking start values, and evidence below still belong to the selected PRN."
+            )
+        else:
+            self.selected_prn_label.setText(
+                f"Selected PRN {result.prn}: the heatmap, local peaks, tracking start values, and evidence below all belong to this satellite candidate."
+            )
+        overview_note = (
+            f" Overview heatmap compares {len(results)} scanned PRNs by their strongest code-phase peak per Doppler bin."
+            if len(results) > 1
+            else ""
         )
         self.summary_label.setText(
             f"Best peak: PRN {result.best_candidate.prn}, "
@@ -277,20 +435,14 @@ class AcquisitionTab(QtWidgets.QWidget):
             f"segment start {result.best_candidate.segment_start_sample / max(result.sample_rate_hz, 1.0):.3f} s, "
             f"metric {result.best_candidate.metric:.2f}, "
             f"consistent segments {result.consistent_segments}, "
-            f"interpretation {acquisition_interpretation(result)}. "
+            f"interpretation {acquisition_interpretation(result)}."
+            f"{overview_note} "
             "A strong, repeated peak across segments is only an acquisition candidate; tracking and navigation evidence are needed before treating it as a satellite."
         )
-        self.heatmap_plot.setTitle(
-            f"PRN {result.prn} acquisition heatmap: code phase vs relative Doppler"
-        )
-        self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
-        rect = pg.QtCore.QRectF(
-            float(result.doppler_bins_hz[0]),
-            float(result.code_phases_samples[0]),
-            float(result.doppler_bins_hz[-1] - result.doppler_bins_hz[0]) if result.doppler_bins_hz.size > 1 else 1.0,
-            float(result.code_phases_samples[-1] - result.code_phases_samples[0]) if result.code_phases_samples.size > 1 else 1.0,
-        )
-        self.heatmap_image.setRect(rect)
+        if len(results) > 1:
+            self._update_prn_doppler_overview(result, results)
+        else:
+            self._update_single_prn_heatmap(result)
         self.candidate_table.setRowCount(len(result.candidates))
         for row, candidate in enumerate(result.candidates):
             self.candidate_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
@@ -299,7 +451,6 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.candidate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
             self.candidate_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
 
-        results = total_results or [result]
         self.satellite_table.blockSignals(True)
         self.satellite_table.setRowCount(len(results))
         for row, sat_result in enumerate(results):
@@ -332,6 +483,8 @@ class AcquisitionTab(QtWidgets.QWidget):
                     f"Interpretation label: {acquisition_interpretation(result)}",
                     "",
                     "How to read this:",
+                    "- In the all-PRN overview, each row is a scanned PRN and brightness is the best code-phase match at that Doppler.",
+                    "- The yellow row/marker is the selected PRN. The local peak table gives the actual code-phase alternatives for that PRN.",
                     "- The brighter the heatmap peak, the better the local PRN matches the signal.",
                     "- Search frequency is the actual tone removed in the sample domain.",
                     "- Relative Doppler is the offset around the chosen IF / search center.",
