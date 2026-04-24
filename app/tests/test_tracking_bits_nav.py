@@ -74,3 +74,6 @@ def test_navigation_decode_pipeline_reports_progress() -> None:
     assert "scanning" in log_messages[1]
     assert bit_result.bit_values.size >= 5
     assert len(nav_result.summary_lines) >= 1
+    prompt_i_bits, prompt_i_nav = decode_navigation_from_tracking(tracking, bit_source="prompt_i")
+    assert prompt_i_bits.bit_values.size >= 5
+    assert prompt_i_nav.summary_lines[0] == "Bit source used: prompt I."

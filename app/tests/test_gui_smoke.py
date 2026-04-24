@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from PySide6 import QtWidgets
 
 from app.gui.main_window import MainWindow
@@ -58,16 +59,31 @@ def _make_tracking_state(prn: int) -> TrackingState:
 def test_main_window_smoke() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
-    assert window.tabs.count() == 8
+    assert window.tabs.count() == 9
+    assert window.tabs.tabText(1) == "Learning Flow"
     assert window.session_tab.sample_rate_spin.value() == round(DEFAULT_SAMPLE_RATE_HZ)
     assert window.session_tab.compute_backend_combo.currentData() == "auto"
     assert window.session_tab.worker_spin.value() == 0
     assert "Runtime status:" in window.session_tab.compute_status_label.text()
     assert window.acquisition_tab.center_sweep_button.text() == "Sweep Search Center"
     assert window.acquisition_tab.auto_detect_button.text() == "Auto Detect Capture"
+    assert window.acquisition_tab.scan_button.text() == "Scan PRN List"
+    assert window.navigation_tab.bit_source_mode() == "auto"
     assert window.acquisition_tab.task_status_label.text() == "Acquisition idle."
     assert window.tracking_tab.task_status_label.text() == "Tracking idle."
     assert window.navigation_tab.task_status_label.text() == "Navigation decoder idle."
+
+
+def test_acquisition_scan_prn_list_parser() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+
+    window.acquisition_tab.scan_prns_edit.setText("1, 3, 8-10")
+    assert window.acquisition_tab.selected_scan_prns() == [1, 3, 8, 9, 10]
+
+    window.acquisition_tab.scan_prns_edit.setText("33")
+    with pytest.raises(ValueError):
+        window.acquisition_tab.selected_scan_prns()
 
 
 def test_session_tab_accepts_large_file_sample_ranges() -> None:
@@ -155,8 +171,26 @@ def test_per_prn_views_keep_all_acquisition_candidates_selectable() -> None:
     assert window.tracking_tab.prn_combo.findData(1) >= 0
     assert window.tracking_tab.prn_combo.findData(2) >= 0
     assert window.acquisition_tab.satellite_table.item(0, 6).text() == "tracked"
+    assert "Selected PRN: 1" in window.learning_tab.selected_label.text()
 
     window.set_selected_prn(2)
 
     assert "Selected PRN 2" in window.acquisition_tab.selected_prn_label.text()
     assert window.acquisition_tab.prn_spin.value() == 2
+    assert "Selected PRN: 2" in window.learning_tab.selected_label.text()
+
+
+def test_tracking_loop_controls_sync_into_session() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    window.tracking_tab.early_late_spin.setValue(0.35)
+    window.tracking_tab.dll_gain_spin.setValue(0.12)
+    window.tracking_tab.pll_gain_spin.setValue(8.5)
+    window.tracking_tab.fll_gain_spin.setValue(0.22)
+
+    window.sync_session_from_ui()
+
+    assert window.session.early_late_spacing_chips == 0.35
+    assert window.session.dll_gain == 0.12
+    assert window.session.pll_gain == 8.5
+    assert window.session.fll_gain == 0.22

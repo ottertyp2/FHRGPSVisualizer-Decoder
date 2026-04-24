@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
 from app.dsp.utils import TOOLTIPS
-from app.models import AcquisitionResult, BitDecisionResult, NavigationDecodeResult, TrackingState
+from app.models import AcquisitionResult, BitDecisionResult, NavigationDecodeResult, SessionConfig, TrackingState
 
 
 class TrackingTab(QtWidgets.QWidget):
@@ -16,6 +16,7 @@ class TrackingTab(QtWidgets.QWidget):
     track_requested = QtCore.Signal()
     decode_requested = QtCore.Signal()
     selection_changed = QtCore.Signal(int)
+    settings_changed = QtCore.Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -37,6 +38,42 @@ class TrackingTab(QtWidgets.QWidget):
         control_row.addWidget(self.decode_button)
         control_row.addStretch()
         layout.addLayout(control_row)
+
+        defaults = SessionConfig()
+        loop_group = QtWidgets.QGroupBox("Tracking loop controls")
+        loop_layout = QtWidgets.QFormLayout(loop_group)
+        self.early_late_spin = QtWidgets.QDoubleSpinBox()
+        self.early_late_spin.setRange(0.05, 1.5)
+        self.early_late_spin.setDecimals(2)
+        self.early_late_spin.setSingleStep(0.05)
+        self.early_late_spin.setValue(defaults.early_late_spacing_chips)
+        self.early_late_spin.setSuffix(" chips")
+        self.early_late_spin.setToolTip("Distance between Early and Late code replicas. Smaller is sharper but noisier.")
+        self.dll_gain_spin = QtWidgets.QDoubleSpinBox()
+        self.dll_gain_spin.setRange(0.0, 1.0)
+        self.dll_gain_spin.setDecimals(3)
+        self.dll_gain_spin.setSingleStep(0.01)
+        self.dll_gain_spin.setValue(defaults.dll_gain)
+        self.dll_gain_spin.setToolTip("Code tracking loop gain. Higher follows code timing faster but can become noisy.")
+        self.pll_gain_spin = QtWidgets.QDoubleSpinBox()
+        self.pll_gain_spin.setRange(0.0, 50.0)
+        self.pll_gain_spin.setDecimals(2)
+        self.pll_gain_spin.setSingleStep(0.5)
+        self.pll_gain_spin.setValue(defaults.pll_gain)
+        self.pll_gain_spin.setToolTip("Carrier phase loop gain. Higher follows phase faster but can overreact.")
+        self.fll_gain_spin = QtWidgets.QDoubleSpinBox()
+        self.fll_gain_spin.setRange(0.0, 2.0)
+        self.fll_gain_spin.setDecimals(3)
+        self.fll_gain_spin.setSingleStep(0.01)
+        self.fll_gain_spin.setValue(defaults.fll_gain)
+        self.fll_gain_spin.setToolTip("Early frequency pull-in gain used while the carrier is still settling.")
+        self.reset_loop_button = QtWidgets.QPushButton("Reset Loop Defaults")
+        loop_layout.addRow("Early/Late spacing", self.early_late_spin)
+        loop_layout.addRow("DLL gain", self.dll_gain_spin)
+        loop_layout.addRow("PLL gain", self.pll_gain_spin)
+        loop_layout.addRow("FLL gain", self.fll_gain_spin)
+        loop_layout.addRow(self.reset_loop_button)
+        layout.addWidget(loop_group)
 
         self.status_label = QtWidgets.QLabel("Tracking not started.")
         self.task_status_label = QtWidgets.QLabel("Tracking idle.")
@@ -90,7 +127,20 @@ class TrackingTab(QtWidgets.QWidget):
 
         self.track_button.clicked.connect(self.track_requested.emit)
         self.decode_button.clicked.connect(self.decode_requested.emit)
+        self.reset_loop_button.clicked.connect(self.reset_loop_controls)
+        for spin in (self.early_late_spin, self.dll_gain_spin, self.pll_gain_spin, self.fll_gain_spin):
+            spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.prn_combo.currentIndexChanged.connect(self._emit_selection_changed)
+
+    def reset_loop_controls(self) -> None:
+        """Restore the default teaching-oriented loop parameters."""
+
+        defaults = SessionConfig()
+        self.early_late_spin.setValue(defaults.early_late_spacing_chips)
+        self.dll_gain_spin.setValue(defaults.dll_gain)
+        self.pll_gain_spin.setValue(defaults.pll_gain)
+        self.fll_gain_spin.setValue(defaults.fll_gain)
+        self.settings_changed.emit()
 
     def _emit_selection_changed(self) -> None:
         data = self.prn_combo.currentData()

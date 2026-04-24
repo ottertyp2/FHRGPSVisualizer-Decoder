@@ -28,9 +28,19 @@ class NavigationTab(QtWidgets.QWidget):
         control_row = QtWidgets.QHBoxLayout()
         self.prn_combo = QtWidgets.QComboBox()
         self.prn_combo.addItem("No PRN")
+        self.bit_source_combo = QtWidgets.QComboBox()
+        self.bit_source_combo.addItem("Auto source", "auto")
+        self.bit_source_combo.addItem("Carrier-aligned prompt", "carrier_aligned")
+        self.bit_source_combo.addItem("Prompt I only", "prompt_i")
+        self.bit_source_combo.addItem("Prompt Q only", "prompt_q")
+        self.bit_source_combo.setToolTip(
+            "Choose which tracked prompt component is converted into 20 ms navigation bits."
+        )
         self.decode_button = QtWidgets.QPushButton("Decode Selected PRN")
         control_row.addWidget(QtWidgets.QLabel("Satellite / PRN"))
         control_row.addWidget(self.prn_combo)
+        control_row.addWidget(QtWidgets.QLabel("Bit source"))
+        control_row.addWidget(self.bit_source_combo)
         control_row.addWidget(self.decode_button)
         control_row.addStretch()
         layout.addLayout(control_row)
@@ -110,6 +120,11 @@ class NavigationTab(QtWidgets.QWidget):
         """Show navigation-side worker progress."""
 
         self.task_progress_bar.setValue(max(0, min(100, int(value))))
+
+    def bit_source_mode(self) -> str:
+        """Return the selected 20 ms bit source mode."""
+
+        return str(self.bit_source_combo.currentData())
 
     def update_results(
         self,

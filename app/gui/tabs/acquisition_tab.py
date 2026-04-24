@@ -36,6 +36,10 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.prn_spin = QtWidgets.QSpinBox()
         self.prn_spin.setRange(1, 32)
         self.prn_spin.setValue(1)
+        self.scan_prns_edit = QtWidgets.QLineEdit("1-32")
+        self.scan_prns_edit.setToolTip(
+            "PRNs for the scan. Examples: 1-32, 1,3,8-10, or 32."
+        )
         self.doppler_min_spin = QtWidgets.QSpinBox()
         self.doppler_min_spin.setRange(-20_000, 0)
         self.doppler_min_spin.setValue(-6_000)
@@ -56,6 +60,7 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.spread_blocks_checkbox = QtWidgets.QCheckBox("Spread 1 ms blocks across loaded source")
         self.spread_blocks_checkbox.setChecked(False)
         controls.addRow("PRN", self.prn_spin)
+        controls.addRow("Scan PRNs", self.scan_prns_edit)
         controls.addRow("Doppler min [Hz]", self.doppler_min_spin)
         controls.addRow("Doppler max [Hz]", self.doppler_max_spin)
         controls.addRow("Doppler step [Hz]", self.doppler_step_spin)
@@ -86,7 +91,7 @@ class AcquisitionTab(QtWidgets.QWidget):
 
         action_row = QtWidgets.QHBoxLayout()
         self.run_button = QtWidgets.QPushButton("Run Acquisition For PRN")
-        self.scan_button = QtWidgets.QPushButton("Scan PRNs 1-32")
+        self.scan_button = QtWidgets.QPushButton("Scan PRN List")
         self.track_button = QtWidgets.QPushButton("Track Highlighted PRN")
         action_row.addWidget(self.run_button)
         action_row.addWidget(self.scan_button)
@@ -162,6 +167,8 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.satellite_hint_label.setWordWrap(True)
         right_layout.addWidget(self.satellite_hint_label)
         self.satellite_table = QtWidgets.QTableWidget(0, 9)
+        self.satellite_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.satellite_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.satellite_table.setHorizontalHeaderLabels(
             [
                 "PRN",
@@ -194,8 +201,39 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.auto_detect_button.clicked.connect(self.auto_rate_survey_requested.emit)
         self.track_button.clicked.connect(self.track_selected_requested.emit)
         self.satellite_table.itemSelectionChanged.connect(self._emit_selection_changed)
+        self.satellite_table.cellDoubleClicked.connect(lambda *_: self.track_selected_requested.emit())
         self.center_table.itemSelectionChanged.connect(self._emit_sweep_selection_changed)
         self.rate_table.itemSelectionChanged.connect(self._emit_sample_rate_selection_changed)
+
+    @staticmethod
+    def parse_prn_list(text: str) -> list[int]:
+        """Parse comma-separated PRNs and ranges such as 1,3,8-10."""
+
+        values: set[int] = set()
+        for token in text.replace(";", ",").split(","):
+            part = token.strip()
+            if not part:
+                continue
+            if "-" in part:
+                left, right = part.split("-", 1)
+                start = int(left.strip())
+                stop = int(right.strip())
+                if stop < start:
+                    start, stop = stop, start
+                values.update(range(start, stop + 1))
+            else:
+                values.add(int(part))
+        if not values:
+            raise ValueError("Enter at least one PRN, for example 1-32 or 1,3,8.")
+        invalid = sorted(value for value in values if value < 1 or value > 32)
+        if invalid:
+            raise ValueError(f"PRNs must be in the GPS C/A range 1..32; invalid: {invalid}.")
+        return sorted(values)
+
+    def selected_scan_prns(self) -> list[int]:
+        """Return the user-selected PRNs for a scan."""
+
+        return self.parse_prn_list(self.scan_prns_edit.text())
 
     def _emit_selection_changed(self) -> None:
         items = self.satellite_table.selectedItems()

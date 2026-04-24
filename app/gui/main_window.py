@@ -32,6 +32,7 @@ from app.dsp.tracking import track_signal
 from app.gui.tabs.acquisition_tab import AcquisitionTab
 from app.gui.tabs.benchmark_tab import BenchmarkTab
 from app.gui.tabs.iq_tab import IQPlaneTab
+from app.gui.tabs.learning_tab import LearningTab
 from app.gui.tabs.navigation_tab import NavigationTab
 from app.gui.tabs.raw_signal_tab import RawSignalTab
 from app.gui.tabs.session_tab import SessionTab
@@ -82,6 +83,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tabs = QtWidgets.QTabWidget()
         self.session_tab = SessionTab()
+        self.learning_tab = LearningTab()
         self.raw_tab = RawSignalTab()
         self.spectrum_tab = SpectrumTab()
         self.iq_tab = IQPlaneTab()
@@ -91,6 +93,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.benchmark_tab = BenchmarkTab()
 
         self.tabs.addTab(self.session_tab, "File / Session")
+        self.tabs.addTab(self.learning_tab, "Learning Flow")
         self.tabs.addTab(self.raw_tab, "Raw Signal")
         self.tabs.addTab(self.spectrum_tab, "Spectrum / Waterfall")
         self.tabs.addTab(self.iq_tab, "IQ Plane")
@@ -139,6 +142,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.navigation_tab.word_table.setRowCount(0)
         self.navigation_tab.set_task_message("Navigation decoder idle.")
         self.navigation_tab.set_task_progress(0)
+        self.learning_tab.update_pipeline(None, None, None, None, None)
 
     def _clear_loaded_samples(self) -> None:
         """Drop cached sample arrays so the next action reads the active source."""
@@ -167,6 +171,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tracking_tab.track_requested.connect(self.start_tracking)
         self.tracking_tab.decode_requested.connect(self.decode_navigation)
         self.tracking_tab.selection_changed.connect(self.set_selected_prn)
+        self.tracking_tab.settings_changed.connect(self.update_ram_status)
         self.navigation_tab.decode_requested.connect(self.decode_navigation)
         self.navigation_tab.selection_changed.connect(self.set_selected_prn)
 
@@ -349,6 +354,10 @@ class MainWindow(QtWidgets.QMainWindow):
         config.integration_ms = self.acquisition_tab.integration_spin.value()
         config.spread_acquisition_blocks = self.acquisition_tab.spread_blocks_checkbox.isChecked()
         config.acquisition_segment_count = self.acquisition_tab.segment_count_spin.value()
+        config.early_late_spacing_chips = self.tracking_tab.early_late_spin.value()
+        config.dll_gain = self.tracking_tab.dll_gain_spin.value()
+        config.pll_gain = self.tracking_tab.pll_gain_spin.value()
+        config.fll_gain = self.tracking_tab.fll_gain_spin.value()
         self.session = config
 
     def load_file_dialog(self) -> None:
@@ -559,6 +568,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tracking_tab.update_state(tracking, acquisition=acquisition, bit_result=bit_result, nav_result=nav_result)
         if bit_result is not None and nav_result is not None:
             self.navigation_tab.update_results(bit_result, nav_result, self.selected_prn, acquisition=acquisition, tracking=tracking)
+        self.learning_tab.update_pipeline(self.selected_prn, acquisition, tracking, bit_result, nav_result)
 
     def _set_tab_task_failed(self, tab, message: str) -> None:
         """Show a failed task state on one processing tab."""
@@ -694,7 +704,16 @@ class MainWindow(QtWidgets.QMainWindow):
         """Run acquisition over PRNs 1..32 for a more intuitive satellite overview."""
 
         self.sync_session_from_ui()
-        self.acquisition_tab.set_task_message("Scanning PRNs 1 through 32.")
+        try:
+            prns = self.acquisition_tab.selected_scan_prns()
+        except ValueError as exc:
+            message = f"Invalid PRN scan list: {exc}"
+            self.acquisition_tab.set_task_message(message)
+            self.append_log(message)
+            QtWidgets.QMessageBox.warning(self, "PRN scan list", message)
+            return
+        prn_text = ",".join(str(prn) for prn in prns)
+        self.acquisition_tab.set_task_message(f"Scanning PRNs {prn_text}.")
         self.acquisition_tab.set_task_progress(0)
         full_samples = self.ensure_samples()
         if full_samples.size == 0:
@@ -703,7 +722,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_display_samples = display_samples
         self.update_passive_views(display_samples)
         samples = self.load_acquisition_samples()
-        worker = Worker(scan_prns_from_session, samples, self.session, list(range(1, 33)))
+        worker = Worker(scan_prns_from_session, samples, self.session, prns)
         self.tabs.setCurrentWidget(self.acquisition_tab)
         self._start_worker(
             worker,
@@ -951,7 +970,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.navigation_tab.set_task_progress(0)
         self.pending_navigation_prn = tracking.prn
         self.tabs.setCurrentWidget(self.navigation_tab)
-        worker = Worker(decode_navigation_from_tracking, tracking)
+        worker = Worker(
+            decode_navigation_from_tracking,
+            tracking,
+            bit_source=self.navigation_tab.bit_source_mode(),
+        )
         self._start_worker(
             worker,
             self._on_navigation_finished,

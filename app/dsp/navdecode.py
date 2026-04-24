@@ -108,6 +108,7 @@ def decode_navigation_bits(bits: BitDecisionResult) -> NavigationDecodeResult:
 
 def decode_navigation_from_tracking(
     tracking: TrackingState,
+    bit_source: str = "auto",
     progress_callback=None,
     log_callback=None,
 ) -> tuple[BitDecisionResult, NavigationDecodeResult]:
@@ -118,17 +119,22 @@ def decode_navigation_from_tracking(
     if progress_callback:
         progress_callback(5)
 
-    bit_candidates = [extract_navigation_bits(tracking)]
+    source = bit_source.lower().strip()
     prompt = tracking.iq_views.get("Integrated prompt")
-    if prompt is not None and prompt.size == tracking.prompt_i.size:
-        bit_candidates.extend(
-            [
-                form_navigation_bits(tracking.prompt_i),
-                form_navigation_bits(tracking.prompt_q),
-                form_navigation_bits(_carrier_aligned_prompt_ms(tracking)),
-            ]
-        )
-    bit_result = bit_candidates[0]
+    candidates: list[tuple[str, BitDecisionResult]] = []
+    if source in ("auto", "carrier_aligned"):
+        candidates.append(("carrier-aligned prompt", extract_navigation_bits(tracking)))
+    if source in ("auto", "prompt_i"):
+        candidates.append(("prompt I", form_navigation_bits(tracking.prompt_i)))
+    if source in ("auto", "prompt_q"):
+        candidates.append(("prompt Q", form_navigation_bits(tracking.prompt_q)))
+    if source not in ("auto", "carrier_aligned", "prompt_i", "prompt_q"):
+        raise ValueError(f"Unsupported bit source {bit_source!r}.")
+    if prompt is not None and prompt.size == tracking.prompt_i.size and source == "auto":
+        candidates.append(("carrier-aligned prompt from IQ view", form_navigation_bits(_carrier_aligned_prompt_ms(tracking))))
+    if not candidates:
+        raise ValueError("No bit source produced a candidate stream.")
+    selected_label, bit_result = candidates[0]
 
     if log_callback:
         log_callback(
@@ -138,7 +144,7 @@ def decode_navigation_from_tracking(
         progress_callback(55)
 
     nav_result = decode_navigation_bits(bit_result)
-    for candidate in bit_candidates[1:]:
+    for candidate_label, candidate in candidates[1:]:
         candidate_nav = decode_navigation_bits(candidate)
         if (
             candidate_nav.parity_ok_count,
@@ -147,8 +153,10 @@ def decode_navigation_from_tracking(
             nav_result.parity_ok_count,
             len(nav_result.preamble_indices),
         ):
+            selected_label = candidate_label
             bit_result = candidate
             nav_result = candidate_nav
+    nav_result.summary_lines.insert(0, f"Bit source used: {selected_label}.")
 
     if progress_callback:
         progress_callback(100)

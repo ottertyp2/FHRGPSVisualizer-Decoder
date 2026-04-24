@@ -41,11 +41,14 @@ Supported well today:
 - little-endian `complex64` IQ recordings (`float32 I` + `float32 Q`)
 - offline preview of selected windows
 - acquisition for one PRN or PRN scan across `1..32`
+- user-selected PRN scan lists such as `1,3,8-10`
 - repeated-segment consistency scoring for weak detections
 - automatic survey of common GNSS sample-rate hypotheses
 - IF / search-center sweeps when the capture is not true baseband
 - simple tracking with Early/Prompt/Late correlators and user-selectable long tracking windows
+- editable tracking-loop controls for Early/Late spacing, DLL gain, PLL gain, and FLL gain
 - 1 ms prompt integrations and 20 ms bit decisions
+- selectable bit source for navigation decoding: auto, carrier-aligned prompt, prompt I, or prompt Q
 - LNAV preamble detection, word sync, and parity checks
 - WGS-84 ECEF/LLA conversion and least-squares position solving from four or more pseudoranges
 - benchmark of file I/O, FFT, acquisition, and tracking throughput
@@ -147,8 +150,8 @@ The sample-rate field is freely editable, so you can enter exact recorder values
 5. Go to `Acquisition` and run either a single-PRN acquisition or a PRN scan.
 6. Click one PRN row to make that satellite candidate active; the heatmap and evidence panel then belong to that PRN.
 7. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
-8. Track the highlighted PRN once acquisition shows a repeated candidate; acquisition alone is not proof of a real satellite.
-9. Decode bits and inspect LNAV framing in `Bits / Navigation`.
+8. Track the highlighted PRN once acquisition shows a repeated candidate; use the loop controls when you want to experiment with DLL/PLL behavior.
+9. Decode bits and inspect LNAV framing in `Bits / Navigation`; switch bit source if the prompt phase looks rotated.
 10. Run `Benchmark` if you want a quick laptop suitability estimate for larger files.
 
 ## What Each Tab Is For
@@ -168,6 +171,10 @@ This is the control center for loading data and choosing how much of the source 
 
 Use this tab to sanity-check the selected window in the time domain before acquisition.
 
+### Learning Flow
+
+This tab keeps the current PRN in context. It summarizes what each layer is doing, what evidence has already been produced for the selected PRN, and what the next useful action is.
+
 ### Spectrum / Waterfall
 
 Use this view to look for occupied bandwidth, DC behavior, and whether the selected acquisition hypothesis matches visible spectral structure.
@@ -182,7 +189,7 @@ This tab is the main diagnosis surface for initial satellite detection:
 
 - code phase vs Doppler heatmap
 - best-candidate tables
-- PRN scan table for `1..32`
+- PRN scan table for `1..32` or a custom PRN list
 - repeated-segment evidence text
 - sample-rate hypothesis ranking
 - IF / center-frequency sweep ranking
@@ -195,6 +202,7 @@ The app deliberately treats repeated evidence across segments as more meaningful
 
 This view shows how one selected PRN behaves after acquisition:
 
+- editable Early/Late spacing and DLL/PLL/FLL loop gains
 - prompt I/Q
 - Early/Prompt/Late magnitudes
 - code and carrier error traces
@@ -205,6 +213,7 @@ This view shows how one selected PRN behaves after acquisition:
 
 This view stays PRN-specific and shows:
 
+- selectable bit source for 20 ms decisions
 - 1 ms prompt values
 - 20 ms bit accumulations
 - hard bit decisions
