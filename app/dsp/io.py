@@ -69,8 +69,11 @@ def load_complex64_samples(file_path: str, start_sample: int, sample_count: int)
     """Load a sample window from a complex64 raw file."""
 
     dtype = np.dtype(np.complex64)
-    offset = max(0, int(start_sample)) * dtype.itemsize
-    count = max(0, int(sample_count))
+    path = Path(file_path)
+    total_samples = path.stat().st_size // dtype.itemsize
+    start = min(max(0, int(start_sample)), total_samples)
+    count = min(max(0, int(sample_count)), total_samples - start)
+    offset = start * dtype.itemsize
     with Path(file_path).open("rb") as handle:
         handle.seek(offset)
         return np.fromfile(handle, dtype=dtype, count=count)
@@ -86,20 +89,23 @@ def load_complex64_samples_with_progress(
     """Load a sample window in chunks and emit progress updates."""
 
     dtype = np.dtype(np.complex64)
-    count = max(0, int(sample_count))
+    path = Path(file_path)
+    total_samples = path.stat().st_size // dtype.itemsize
+    start = min(max(0, int(start_sample)), total_samples)
+    count = min(max(0, int(sample_count)), total_samples - start)
     if count == 0:
         if progress_callback:
             progress_callback(100)
         return np.empty(0, dtype=dtype)
 
     if progress_callback is None or count <= chunk_samples:
-        result = load_complex64_samples(file_path, start_sample, count)
+        result = load_complex64_samples(file_path, start, count)
         if progress_callback:
             progress_callback(100)
         return result
 
     result = np.empty(count, dtype=dtype)
-    offset = max(0, int(start_sample)) * dtype.itemsize
+    offset = start * dtype.itemsize
     loaded = 0
     with Path(file_path).open("rb") as handle:
         handle.seek(offset)

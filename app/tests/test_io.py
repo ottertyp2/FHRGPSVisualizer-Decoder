@@ -19,3 +19,13 @@ def test_complex64_inspection_and_load(tmp_path: Path) -> None:
     assert "6.061 MSa/s" in metadata.common_rate_duration_hints
     loaded = load_complex64_samples(str(file_path), start_sample=4, sample_count=8)
     np.testing.assert_allclose(loaded, data[4:12])
+
+
+def test_complex64_window_load_is_capped_to_file_size(tmp_path: Path) -> None:
+    data = (np.arange(8, dtype=np.float32) + 1j * np.arange(8, dtype=np.float32)).astype(np.complex64)
+    file_path = tmp_path / "iq.bin"
+    data.tofile(file_path)
+
+    loaded = load_complex64_samples(str(file_path), start_sample=6, sample_count=100)
+
+    np.testing.assert_allclose(loaded, data[6:])

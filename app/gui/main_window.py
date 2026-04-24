@@ -64,7 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.file_metadata: FileMetadata | None = None
         self.current_samples = np.empty(0, dtype=np.complex64)
         self.current_display_samples = np.empty(0, dtype=np.complex64)
-        self.current_samples_signature: str | None = None
+        self.current_samples_signature: tuple[str | None, bool, int, int] | None = None
         self.demo_signal: DemoSignalResult | None = None
         self.acquisition_result: AcquisitionResult | None = None
         self.tracking_state: TrackingState | None = None
@@ -101,6 +101,49 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._connect_signals()
         self._load_default_file_if_present()
+
+    def _clear_processing_results(self) -> None:
+        """Drop results that belong to a previous source or analysis context."""
+
+        self.acquisition_result = None
+        self.tracking_state = None
+        self.bit_result = None
+        self.nav_result = None
+        self.acquisition_results_by_prn.clear()
+        self.tracking_results_by_prn.clear()
+        self.bit_results_by_prn.clear()
+        self.nav_results_by_prn.clear()
+        self.search_center_sweep_result = None
+        self.sample_rate_survey_result = None
+        self.selected_prn = None
+        self.pending_navigation_prn = None
+        self.acquisition_tab.summary_label.setText("No acquisition result yet. Run one PRN or scan multiple PRNs.")
+        self.acquisition_tab.candidate_table.setRowCount(0)
+        self.acquisition_tab.rate_table.setRowCount(0)
+        self.acquisition_tab.center_table.setRowCount(0)
+        self.acquisition_tab.satellite_table.setRowCount(0)
+        self.acquisition_tab.evidence_text.clear()
+        self.acquisition_tab.set_task_message("Acquisition idle.")
+        self.acquisition_tab.set_task_progress(0)
+        self.tracking_tab.set_available_prns([])
+        self.tracking_tab.status_label.setText("Tracking not started.")
+        self.tracking_tab.evidence_text.clear()
+        self.tracking_tab.set_task_message("Tracking idle.")
+        self.tracking_tab.set_task_progress(0)
+        self.navigation_tab.set_available_prns([])
+        self.navigation_tab.summary_label.setText("Navigation decoding not started.")
+        self.navigation_tab.evidence_text.clear()
+        self.navigation_tab.bits_text.clear()
+        self.navigation_tab.word_table.setRowCount(0)
+        self.navigation_tab.set_task_message("Navigation decoder idle.")
+        self.navigation_tab.set_task_progress(0)
+
+    def _clear_loaded_samples(self) -> None:
+        """Drop cached sample arrays so the next action reads the active source."""
+
+        self.current_samples = np.empty(0, dtype=np.complex64)
+        self.current_display_samples = np.empty(0, dtype=np.complex64)
+        self.current_samples_signature = None
 
     def _connect_signals(self) -> None:
         self.session_tab.load_file_requested.connect(self.load_file_dialog)
@@ -166,7 +209,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.demo_signal is not None:
             if self.session_tab.preload_enabled():
                 return int(self.demo_signal.samples.nbytes)
-            return int(min(self.demo_signal.samples.size - self.session.start_sample, self.session.sample_count)) * np.dtype(np.complex64).itemsize
+            available = max(0, self.demo_signal.samples.size - int(self.session.start_sample))
+            return int(min(available, self.session.sample_count)) * np.dtype(np.complex64).itemsize
 
         if self.file_metadata is None:
             return int(self.session.sample_count) * np.dtype(np.complex64).itemsize
@@ -322,6 +366,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def inspect_file(self, file_path: str) -> None:
         """Inspect the current file and update metadata widgets."""
 
+        previous_metadata_path = self.file_metadata.file_path if self.file_metadata is not None else None
+        source_changed = self.demo_signal is not None or (
+            previous_metadata_path is not None and previous_metadata_path != file_path
+        )
+        if source_changed:
+            self.demo_signal = None
+            self._clear_loaded_samples()
+            self._clear_processing_results()
+
         self.sync_session_from_ui()
         metadata = inspect_complex64_file(file_path, self.session.sample_rate)
         self.file_metadata = metadata
@@ -431,9 +484,14 @@ class MainWindow(QtWidgets.QMainWindow):
         count = min(window.size, int(max_samples))
         self.current_display_samples = window[:count]
         if self.session.sample_count > count:
+            source_text = (
+                "The full file is still resident in RAM."
+                if self.session_tab.preload_enabled()
+                else "Only the selected window was loaded."
+            )
             self.append_log(
                 f"Display window capped to {count:,} samples for responsiveness. "
-                "The full file is still resident in RAM."
+                f"{source_text}"
             )
         return self.current_display_samples
 
@@ -911,14 +969,11 @@ class MainWindow(QtWidgets.QMainWindow):
             duration_s=max(0.2, self.session.sample_count / self.session.sample_rate),
             prn=self.session.prn,
         )
+        self._clear_processing_results()
         self.demo_signal = demo
         self.current_samples = demo.samples
         self.current_display_samples = demo.samples[: min(500_000, demo.samples.size)]
         self.current_samples_signature = self._current_signature()
-        self.acquisition_results_by_prn.clear()
-        self.tracking_results_by_prn.clear()
-        self.bit_results_by_prn.clear()
-        self.nav_results_by_prn.clear()
         self.selected_prn = demo.prn
         self.file_metadata = FileMetadata(
             file_path="<demo>",

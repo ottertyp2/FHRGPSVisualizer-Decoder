@@ -310,8 +310,18 @@ def acquire_signal(
         raise ValueError("No samples available for acquisition.")
 
     sample_rate = config.sample_rate
+    if sample_rate <= 0:
+        raise ValueError("Sample rate must be positive for acquisition.")
+    if config.doppler_step <= 0:
+        raise ValueError("Doppler step must be positive for acquisition.")
+
     samples_per_ms = int(round(sample_rate * 1e-3))
+    if samples_per_ms <= 0:
+        raise ValueError("Sample rate is too low for 1 ms acquisition blocks.")
     total_ms = samples.size // samples_per_ms
+    if total_ms <= 0:
+        raise ValueError("Selected sample window is shorter than one 1 ms acquisition block.")
+
     segment_starts_ms = _select_segment_starts_ms(total_ms, config.integration_ms, config.acquisition_segment_count)
     if segment_starts_ms.size == 0:
         raise ValueError("Not enough data for one 1 ms acquisition block.")

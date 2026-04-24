@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
@@ -140,8 +141,10 @@ class TrackingTab(QtWidgets.QWidget):
             )
         evidence_lines.extend(
             [
-                f"Median prompt magnitude: {float(state.prompt_mag.mean()):.4f}",
-                f"Median lock metric: {float(state.lock_metric.mean()):.2f}",
+                "Median prompt magnitude: "
+                f"{float(np.median(state.prompt_mag)) if state.prompt_mag.size else 0.0:.4f}",
+                "Median lock metric: "
+                f"{float(np.median(state.lock_metric)) if state.lock_metric.size else 0.0:.2f}",
                 f"Tracking interpretation: {'carrier/code alignment looks stable' if state.lock_detected else 'alignment is still weak or noisy'}.",
             ]
         )
