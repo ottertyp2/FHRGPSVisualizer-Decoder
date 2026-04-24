@@ -40,9 +40,9 @@ def generate_demo_signal(
 
     sample_count = int(sample_rate * duration_s)
     time = np.arange(sample_count, dtype=np.float64) / sample_rate
-    nav_bit_count = max(1, int(np.ceil(duration_s / 0.02)))
-    nav_bits = _build_demo_nav_bits(nav_bit_count)
     bit_samples = int(round(sample_rate * 0.02))
+    nav_bit_count = max(1, int(np.ceil(sample_count / max(bit_samples, 1))))
+    nav_bits = _build_demo_nav_bits(nav_bit_count)
     nav_stream = np.repeat(1 - 2 * nav_bits, bit_samples)[:sample_count].astype(np.float32)
     code_phase_chips = code_phase_samples * 1023.0 / int(round(sample_rate * 1e-3))
     code = sample_ca_code(prn, sample_rate, sample_count, code_phase_chips, CA_CODE_RATE_HZ)

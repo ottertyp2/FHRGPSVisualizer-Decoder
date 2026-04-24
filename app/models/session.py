@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-DEFAULT_SAMPLE_RATE_HZ = 6_061_000.0
+DEFAULT_SAMPLE_RATE_HZ = 200_000_000.0 / 33.0
 DEFAULT_WINDOW_SAMPLES = int(DEFAULT_SAMPLE_RATE_HZ)
 
 

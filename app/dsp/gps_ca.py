@@ -60,7 +60,7 @@ def generate_ca_code(prn: int) -> np.ndarray:
 
     for idx in range(CA_CODE_LENGTH):
         g1_out = g1[-1]
-        g2_out = g2[-tap1] ^ g2[-tap2]
+        g2_out = g2[tap1 - 1] ^ g2[tap2 - 1]
         code[idx] = 1 - 2 * (g1_out ^ g2_out)
 
         g1_feedback = g1[2] ^ g1[9]

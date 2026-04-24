@@ -726,7 +726,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if acquisition_result_is_plausible(result):
             self.append_log(
                 f"Acquisition finished. PRN {result.prn} repeats across {result.consistent_segments} segments, "
-                f"so it looks more plausible than a one-off peak even though the raw metric is {result.best_candidate.metric:.2f}."
+                f"so it is a stronger acquisition candidate than a one-off peak. "
+                f"The raw metric is {result.best_candidate.metric:.2f}; run tracking before treating it as a satellite."
             )
         elif result.consistent_segments >= 3:
             self.append_log(
@@ -768,7 +769,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.append_log(
                 f"PRN scan finished. Best hypothesis is PRN {results[0].prn} with repeated hits in "
                 f"{results[0].consistent_segments} segments at {results[0].best_candidate.carrier_frequency_hz:.1f} Hz. "
-                "That kind of repetition is much more believable than a single isolated peak."
+                "That kind of repetition is useful acquisition evidence, but tracking is still required before calling it a satellite."
             )
         elif results and results[0].consistent_segments >= 3:
             self.append_log(
@@ -923,7 +924,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iq_tab.set_sources(sources)
         self.refresh_satellite_views()
         self.session_tab.set_progress(100)
-        self.append_log("Tracking finished.")
+        if result.lock_detected:
+            self.append_log(f"Tracking finished. PRN {result.prn} produced a lock indication.")
+        else:
+            self.append_log(
+                f"Tracking finished. PRN {result.prn} did not lock, so the acquisition candidate is not confirmed."
+            )
         self._set_tab_task_finished(self.tracking_tab, f"Tracking finished for PRN {result.prn}.")
         self.tabs.setCurrentWidget(self.tracking_tab)
 

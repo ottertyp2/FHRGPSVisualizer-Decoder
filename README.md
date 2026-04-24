@@ -131,7 +131,7 @@ The main GUI workflow currently assumes:
 
 Default working assumptions in the UI:
 
-- sample rate: `6.061 MSa/s` (`6061000 Sa/s` for the latest sample file)
+- sample rate: `6.061 MSa/s` (`200e6 / 33 = 6060606.0606 Sa/s` for the latest X310 sample files)
 - center frequency: `1575.42 MHz`
 - signal mode: baseband unless you specify a nonzero IF / search center
 
@@ -146,7 +146,7 @@ The sample-rate field is freely editable, so you can enter exact recorder values
 4. Click `Preview` to inspect a bounded window before committing to heavier DSP steps.
 5. Go to `Acquisition` and run either a single-PRN acquisition or a PRN scan.
 6. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
-7. Track the highlighted PRN once acquisition looks believable.
+7. Track the highlighted PRN once acquisition shows a repeated candidate; acquisition alone is not proof of a real satellite.
 8. Decode bits and inspect LNAV framing in `Bits / Navigation`.
 9. Run `Benchmark` if you want a quick laptop suitability estimate for larger files.
 

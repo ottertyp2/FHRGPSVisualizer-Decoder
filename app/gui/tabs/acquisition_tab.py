@@ -143,7 +143,7 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.satellite_table.horizontalHeader().setStretchLastSection(True)
         right_layout.addWidget(self.satellite_table, stretch=1)
 
-        right_layout.addWidget(QtWidgets.QLabel("Why this looks like one satellite"))
+        right_layout.addWidget(QtWidgets.QLabel("Acquisition evidence"))
         self.evidence_text = QtWidgets.QPlainTextEdit()
         self.evidence_text.setReadOnly(True)
         right_layout.addWidget(self.evidence_text, stretch=1)
@@ -194,7 +194,7 @@ class AcquisitionTab(QtWidgets.QWidget):
             f"metric {result.best_candidate.metric:.2f}, "
             f"consistent segments {result.consistent_segments}, "
             f"interpretation {acquisition_interpretation(result)}. "
-            "A strong, repeated peak across segments is more trustworthy than one isolated hit."
+            "A strong, repeated peak across segments is only an acquisition candidate; tracking and navigation evidence are needed before treating it as a satellite."
         )
         self.heatmap_image.setImage(result.heatmap.T, autoLevels=True)
         rect = pg.QtCore.QRectF(
@@ -244,8 +244,9 @@ class AcquisitionTab(QtWidgets.QWidget):
                     "- Search frequency is the actual tone removed in the sample domain.",
                     "- Relative Doppler is the offset around the chosen IF / search center.",
                     "- Code phase tells you where the PRN alignment happens within the 1 ms code.",
-                    "- Repeated hits across different file segments are much more convincing than one isolated maximum.",
+                    "- Repeated hits across different file segments are more convincing than one isolated maximum.",
                     "- Repetition alone is not enough when the raw metric stays weak across every segment.",
+                    "- Acquisition alone does not prove that a real satellite is present; verify the highlighted candidate with tracking and navigation decoding.",
                     "",
                     "Segment evidence:",
                 ]

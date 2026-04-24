@@ -179,7 +179,7 @@ def acquisition_interpretation(result: AcquisitionResult) -> str:
     """Provide a short user-facing interpretation label for one result."""
 
     if acquisition_result_is_plausible(result):
-        return "repeated / plausible"
+        return "repeated candidate; verify with tracking"
     if result.consistent_segments >= 3:
         return "repeated but still weak"
     return "weak / uncertain"

@@ -54,7 +54,7 @@ def test_interpretation_requires_strong_metric_for_plausible_label() -> None:
     strong_repeated = _make_result(metric=6.20, consistent_segments=4, consistency_score=24.80)
 
     assert acquisition_interpretation(weak_repeated) == "repeated but still weak"
-    assert acquisition_interpretation(strong_repeated) == "repeated / plausible"
+    assert acquisition_interpretation(strong_repeated) == "repeated candidate; verify with tracking"
 
 
 def test_segment_consistency_allows_smooth_code_phase_drift() -> None:

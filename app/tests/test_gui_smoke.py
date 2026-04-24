@@ -6,14 +6,14 @@ import numpy as np
 from PySide6 import QtWidgets
 
 from app.gui.main_window import MainWindow
-from app.models import FileMetadata
+from app.models import DEFAULT_SAMPLE_RATE_HZ, FileMetadata
 
 
 def test_main_window_smoke() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
     assert window.tabs.count() == 8
-    assert window.session_tab.sample_rate_spin.value() == 6_061_000.0
+    assert window.session_tab.sample_rate_spin.value() == round(DEFAULT_SAMPLE_RATE_HZ)
     assert window.session_tab.compute_backend_combo.currentData() == "auto"
     assert window.session_tab.worker_spin.value() == 0
     assert "Runtime status:" in window.session_tab.compute_status_label.text()
