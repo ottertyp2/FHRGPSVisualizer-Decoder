@@ -46,16 +46,20 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.doppler_min_spin = QtWidgets.QSpinBox()
         self.doppler_min_spin.setRange(-20_000, 0)
         self.doppler_min_spin.setValue(-6_000)
+        self.doppler_min_spin.setToolTip(TOOLTIPS["doppler_bin"])
         self.doppler_max_spin = QtWidgets.QSpinBox()
         self.doppler_max_spin.setRange(0, 20_000)
         self.doppler_max_spin.setValue(6_000)
+        self.doppler_max_spin.setToolTip(TOOLTIPS["doppler_bin"])
         self.doppler_step_spin = QtWidgets.QSpinBox()
         self.doppler_step_spin.setRange(50, 2_000)
         self.doppler_step_spin.setValue(500)
+        self.doppler_step_spin.setToolTip("Spacing between Doppler hypotheses. Smaller steps cost more but can reveal narrower peaks.")
         self.integration_spin = QtWidgets.QSpinBox()
         self.integration_spin.setRange(1, 500)
         self.integration_spin.setValue(20)
         self.integration_spin.setSuffix(" ms blocks")
+        self.integration_spin.setToolTip(TOOLTIPS["integration_1ms"])
         self.segment_count_spin = QtWidgets.QSpinBox()
         self.segment_count_spin.setRange(1, 32)
         self.segment_count_spin.setValue(4)
@@ -125,6 +129,27 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.stage_hint_label.setWordWrap(True)
         layout.addWidget(self.stage_hint_label)
 
+        what_group = QtWidgets.QGroupBox("What am I seeing?")
+        what_layout = QtWidgets.QVBoxLayout(what_group)
+        self.what_label = QtWidgets.QLabel(
+            "This view searches one PRN over Doppler and code phase. "
+            "For each Doppler bin, the assumed carrier rotation is removed; then the local PRN code is shifted and correlated. "
+            "A bright peak means this PRN, this frequency hypothesis, and this 1 ms code timing fit best."
+        )
+        self.what_label.setWordWrap(True)
+        what_layout.addWidget(self.what_label)
+        self.axis_help_label = QtWidgets.QLabel(
+            "X axis: Doppler / search frequency hypothesis. Y axis: codephase / sample offset inside the repeated 1 ms C/A code. "
+            "Brightness: correlation energy. Doppler bin is not a satellite ID; satellites are primarily separated by PRN code. "
+            "Codephase is not IQ phase; correct Doppler stops rotation but does not force codephase to 0."
+        )
+        self.axis_help_label.setToolTip(
+            f"{TOOLTIPS['code_phase']} {TOOLTIPS['doppler_bin']} {TOOLTIPS['iq_phase']}"
+        )
+        self.axis_help_label.setWordWrap(True)
+        what_layout.addWidget(self.axis_help_label)
+        layout.addWidget(what_group)
+
         splitter = QtWidgets.QSplitter()
         splitter.setOrientation(QtCore.Qt.Horizontal)
 
@@ -145,6 +170,30 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.selected_prn_line.setVisible(False)
         self.heatmap_plot.addItem(self.selected_prn_line)
         left_layout.addWidget(self.heatmap_plot, stretch=1)
+
+        slice_group = QtWidgets.QGroupBox("Peak detail slices")
+        slice_layout = QtWidgets.QHBoxLayout(slice_group)
+        self.codephase_slice_plot = pg.PlotWidget(title="Codephase slice at best Doppler")
+        self.codephase_slice_plot.setToolTip(
+            "Shows correlation over codephase while Doppler is fixed at the selected peak."
+        )
+        self.codephase_slice_plot.setLabel("bottom", "Code phase", units="samples")
+        self.codephase_slice_plot.setLabel("left", "Correlation")
+        self.codephase_slice_curve = self.codephase_slice_plot.plot(pen="y")
+        self.codephase_slice_peak = pg.ScatterPlotItem(size=8, pen=pg.mkPen("#111111"), brush=pg.mkBrush("#ffd43b"))
+        self.codephase_slice_plot.addItem(self.codephase_slice_peak)
+        self.doppler_slice_plot = pg.PlotWidget(title="Doppler slice at best codephase")
+        self.doppler_slice_plot.setToolTip(
+            "Shows correlation over Doppler while codephase is fixed at the selected peak."
+        )
+        self.doppler_slice_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.doppler_slice_plot.setLabel("left", "Correlation")
+        self.doppler_slice_curve = self.doppler_slice_plot.plot(pen="c")
+        self.doppler_slice_peak = pg.ScatterPlotItem(size=8, pen=pg.mkPen("#111111"), brush=pg.mkBrush("#ffd43b"))
+        self.doppler_slice_plot.addItem(self.doppler_slice_peak)
+        slice_layout.addWidget(self.codephase_slice_plot)
+        slice_layout.addWidget(self.doppler_slice_plot)
+        left_layout.addWidget(slice_group, stretch=1)
 
         self.peak_hint_label = QtWidgets.QLabel(
             "When multiple PRNs were scanned, the heatmap has exactly one row per scanned PRN. "
@@ -329,6 +378,60 @@ class AcquisitionTab(QtWidgets.QWidget):
             if result.prn == selected_prn or acquisition_result_is_plausible(result)
         ]
 
+    @staticmethod
+    def best_heatmap_indices(result: AcquisitionResult) -> tuple[int, int]:
+        """Return heatmap row/column for the selected best candidate."""
+
+        heatmap = np.asarray(result.heatmap)
+        if heatmap.ndim != 2 or heatmap.size == 0:
+            return 0, 0
+        row_count, column_count = heatmap.shape
+        if row_count <= 0 or column_count <= 0:
+            return 0, 0
+        if result.doppler_bins_hz.size:
+            row = int(np.argmin(np.abs(result.doppler_bins_hz[:row_count] - result.best_candidate.doppler_hz)))
+        else:
+            row = 0
+        column = int((-int(result.best_candidate.code_phase_samples)) % column_count)
+        return max(0, min(row, row_count - 1)), max(0, min(column, column_count - 1))
+
+    @classmethod
+    def codephase_slice(
+        cls,
+        result: AcquisitionResult,
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """Return correlation over codephase at the best Doppler row."""
+
+        heatmap = np.asarray(result.heatmap, dtype=np.float32)
+        if heatmap.ndim != 2 or heatmap.size == 0:
+            return np.empty(0), np.empty(0), 0.0, 0.0
+        row, column = cls.best_heatmap_indices(result)
+        column_count = heatmap.shape[1]
+        codephase_axis = (column_count - np.arange(column_count, dtype=np.int32)) % column_count
+        order = np.argsort(codephase_axis)
+        values = heatmap[row, order]
+        peak_phase = float(result.best_candidate.code_phase_samples % column_count)
+        peak_value = float(heatmap[row, column])
+        return codephase_axis[order].astype(np.float32), values.astype(np.float32), peak_phase, peak_value
+
+    @classmethod
+    def doppler_slice(
+        cls,
+        result: AcquisitionResult,
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """Return correlation over Doppler at the best codephase column."""
+
+        heatmap = np.asarray(result.heatmap, dtype=np.float32)
+        if heatmap.ndim != 2 or heatmap.size == 0:
+            return np.empty(0), np.empty(0), 0.0, 0.0
+        row, column = cls.best_heatmap_indices(result)
+        row_count = min(heatmap.shape[0], result.doppler_bins_hz.size)
+        doppler_axis = result.doppler_bins_hz[:row_count].astype(np.float32)
+        values = heatmap[:row_count, column].astype(np.float32)
+        peak_doppler = float(result.doppler_bins_hz[row]) if result.doppler_bins_hz.size else 0.0
+        peak_value = float(heatmap[row, column])
+        return doppler_axis, values, peak_doppler, peak_value
+
     def clear_result_view(self) -> None:
         """Clear acquisition plots and tables when the source context changes."""
 
@@ -339,6 +442,20 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.heatmap_image.setImage(np.zeros((1, 1), dtype=np.float32), autoLevels=False)
         self.peak_scatter.setData(spots=[])
         self.selected_prn_line.setVisible(False)
+        self.codephase_slice_curve.setData([], [])
+        self.codephase_slice_peak.setData([], [])
+        self.doppler_slice_curve.setData([], [])
+        self.doppler_slice_peak.setData([], [])
+
+    def _update_slice_plots(self, result: AcquisitionResult) -> None:
+        """Refresh codephase and Doppler cuts through the selected acquisition peak."""
+
+        code_axis, code_values, peak_phase, peak_value = self.codephase_slice(result)
+        self.codephase_slice_curve.setData(code_axis, code_values)
+        self.codephase_slice_peak.setData([peak_phase], [peak_value])
+        doppler_axis, doppler_values, peak_doppler, doppler_peak_value = self.doppler_slice(result)
+        self.doppler_slice_curve.setData(doppler_axis, doppler_values)
+        self.doppler_slice_peak.setData([peak_doppler], [doppler_peak_value])
 
     def _update_single_prn_heatmap(self, result: AcquisitionResult) -> None:
         """Show the full code-phase search surface for one selected PRN."""
@@ -494,6 +611,7 @@ class AcquisitionTab(QtWidgets.QWidget):
             self._update_prn_doppler_overview(result, results)
         else:
             self._update_single_prn_heatmap(result)
+        self._update_slice_plots(result)
         self.candidate_table.setRowCount(len(result.candidates))
         for row, candidate in enumerate(result.candidates):
             self.candidate_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
@@ -543,6 +661,8 @@ class AcquisitionTab(QtWidgets.QWidget):
                     "- Search frequency is the actual tone removed in the sample domain.",
                     "- Relative Doppler is the offset around the chosen IF / search center.",
                     "- Code phase tells you where the PRN alignment happens within the 1 ms code.",
+                    "- The codephase slice fixes Doppler and shows why the best codephase is a timing offset.",
+                    "- The Doppler slice fixes codephase and shows why carrier frequency and PRN timing must be searched together.",
                     "- Repeated hits across different file segments are more convincing than one isolated maximum.",
                     "- Repetition alone is not enough when the raw metric stays weak across every segment.",
                     "- Acquisition alone does not prove that a real satellite is present; verify the highlighted candidate with tracking and navigation decoding.",

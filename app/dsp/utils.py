@@ -19,6 +19,13 @@ TOOLTIPS: dict[str, str] = {
     "waterfall": "A waterfall helps spot changing interference or Doppler trends, even when the GPS signal is weak.",
     "early_late": "Early, Prompt, and Late correlators compare alignment around the code phase to steer the DLL.",
     "nav_bits": "GPS LNAV carries one navigation bit every 20 ms, so 20 prompt integrations form one bit decision.",
+    "iq_phase": "IQ phase is the angle of a complex sample. Doppler wipeoff can make that angle stop rotating, but it does not have to become 0 degrees.",
+    "code_phase": "Code phase is a time offset inside the repeating 1 ms C/A code. It is not an angle in the IQ plane.",
+    "doppler_bin": "A Doppler bin is one frequency hypothesis tested during acquisition. It is not a satellite identity.",
+    "prn_code": "PRN / C/A code is the repeating spreading pattern that primarily separates GPS satellites on L1 C/A.",
+    "carrier_wipeoff": "Carrier wipeoff multiplies by an opposite complex tone to remove an assumed Doppler rotation.",
+    "integration_1ms": "1 ms integration sums one full C/A-code period into a prompt value after carrier wipeoff and despreading.",
+    "lnav_20ms": "20 ms LNAV accumulation sums twenty 1 ms prompt values to decide one 50 bps navigation bit.",
 }
 
 

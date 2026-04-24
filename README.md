@@ -39,6 +39,7 @@ That means the GUI favors:
 Supported well today:
 
 - little-endian `complex64` IQ recordings (`float32 I` + `float32 Q`)
+- synthetic `Signal Intuition` lab for GPS IQ, Doppler, PRN, and bit-timing concepts
 - offline preview of selected windows
 - acquisition for one PRN or PRN scan across `1..32`
 - user-selected PRN scan lists such as `1,3,8-10`
@@ -154,6 +155,14 @@ The sample-rate field is freely editable, so you can enter exact recorder values
 9. Decode bits and inspect LNAV framing in `Bits / Navigation`; switch bit source if the prompt phase looks rotated.
 10. Run `Benchmark` if you want a quick laptop suitability estimate for larger files.
 
+## Learning / Concept Lab
+
+The `Signal Intuition` tab is a file-free concept lab. It generates a tiny synthetic GPS-like signal so you can change PRN, Doppler, codephase, noise, and an optional second PRN without waiting for a real capture.
+
+Use it to see why clean BPSK starts as a line in the IQ plane, why Doppler makes points rotate, why noise and multiple PRNs become a cloud, and why two satellites can share the same Doppler bin but still separate through different PRN codes. The tab also shows carrier wipeoff, PRN correlation versus codephase, a mini acquisition heatmap, and 1 ms prompt points.
+
+Real decoding evidence still lives in `Acquisition`, `Tracking`, and `Bits / Navigation`; the concept lab is the safe sandbox for building the mental model before interpreting real captures.
+
 ## What Each Tab Is For
 
 ### File / Session
@@ -174,6 +183,10 @@ Use this tab to sanity-check the selected window in the time domain before acqui
 ### Learning Flow
 
 This tab keeps the current PRN in context. It summarizes what each layer is doing, what evidence has already been produced for the selected PRN, and what the next useful action is.
+
+### Signal Intuition
+
+This tab is the synthetic concept lab. It demonstrates raw IQ clouds, Doppler rotation, carrier wipeoff, codephase correlation, PRN separation, and 1 ms prompt formation without requiring an IQ file.
 
 ### Spectrum / Waterfall
 

@@ -56,6 +56,23 @@ class NavigationTab(QtWidgets.QWidget):
         self.stage_hint_label.setWordWrap(True)
         layout.addWidget(self.stage_hint_label)
 
+        what_group = QtWidgets.QGroupBox("What am I seeing?")
+        what_layout = QtWidgets.QVBoxLayout(what_group)
+        what_label = QtWidgets.QLabel(
+            "Navigation works on tracked Prompt values, not on raw IQ. "
+            "Each prompt point is already carrier-wiped and despread for the selected PRN. "
+            "The PRN correlation separates satellites; the 20 ms sum improves the 50 bps LNAV bit decision."
+        )
+        what_label.setWordWrap(True)
+        what_layout.addWidget(what_label)
+        bit_help_label = QtWidgets.QLabel(
+            "GPS LNAV is 50 bps, so one data bit lasts 20 ms. "
+            "The decoder tries the 20 possible millisecond offsets, sums twenty 1 ms prompt values, and uses the sign as the hard bit."
+        )
+        bit_help_label.setWordWrap(True)
+        what_layout.addWidget(bit_help_label)
+        layout.addWidget(what_group)
+
         self.task_progress_bar = QtWidgets.QProgressBar()
         self.task_progress_bar.setRange(0, 100)
         self.task_progress_bar.setValue(0)

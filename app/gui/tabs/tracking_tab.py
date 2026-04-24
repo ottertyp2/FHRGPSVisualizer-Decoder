@@ -6,7 +6,7 @@ import numpy as np
 from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
-from app.dsp.utils import TOOLTIPS
+from app.dsp.utils import TOOLTIPS, decimate_for_display
 from app.models import AcquisitionResult, BitDecisionResult, NavigationDecodeResult, SessionConfig, TrackingState
 
 
@@ -85,6 +85,23 @@ class TrackingTab(QtWidgets.QWidget):
         self.stage_hint_label.setWordWrap(True)
         layout.addWidget(self.stage_hint_label)
 
+        what_group = QtWidgets.QGroupBox("What am I seeing?")
+        what_layout = QtWidgets.QVBoxLayout(what_group)
+        what_label = QtWidgets.QLabel(
+            "Tracking takes the acquisition peak as a starting point. "
+            "It updates carrier frequency and code phase every millisecond so the selected PRN stays aligned. "
+            "Early/Prompt/Late tell whether the local code is too early, on time, or too late."
+        )
+        what_label.setWordWrap(True)
+        what_layout.addWidget(what_label)
+        carrier_label = QtWidgets.QLabel(
+            "Doppler compensation stops rotation for the selected channel hypothesis. "
+            "The absolute residual IQ phase can still be arbitrary; PLL/tracking only tries to keep the prompt energy stable, usually near I."
+        )
+        carrier_label.setWordWrap(True)
+        what_layout.addWidget(carrier_label)
+        layout.addWidget(what_group)
+
         self.task_progress_bar = QtWidgets.QProgressBar()
         self.task_progress_bar.setRange(0, 100)
         self.task_progress_bar.setValue(0)
@@ -96,6 +113,33 @@ class TrackingTab(QtWidgets.QWidget):
         self.evidence_text.setReadOnly(True)
         self.evidence_text.setMaximumHeight(140)
         layout.addWidget(self.evidence_text)
+
+        self.stage_iq_scatters: dict[str, pg.ScatterPlotItem] = {}
+        stage_group = QtWidgets.QGroupBox("Signal stage IQ views")
+        stage_layout = QtWidgets.QGridLayout(stage_group)
+        stage_explanations = {
+            "Raw IQ": "Raw IQ is the sum of all received signals plus front-end effects and noise. It usually looks like a cloud, not clean bits.",
+            "Carrier wiped": "Carrier wiped IQ has the selected Doppler hypothesis removed. Rotation can stop while the remaining phase is still not 0 degrees.",
+            "Despread": "Despreading multiplies by the selected local PRN. The desired PRN adds coherently; other PRNs mostly do not.",
+            "Integrated prompt": "Integrated prompt is one complex value per 1 ms after carrier wipeoff and PRN despreading. This is where a tracked BPSK channel should most clearly form a line or clusters.",
+        }
+        for index, (name, explanation) in enumerate(stage_explanations.items()):
+            plot = pg.PlotWidget(title=name)
+            plot.setMinimumHeight(130)
+            plot.setLabel("bottom", "I")
+            plot.setLabel("left", "Q")
+            plot.showGrid(x=True, y=True, alpha=0.2)
+            scatter = pg.ScatterPlotItem(size=4, pen=pg.mkPen(None), brush=pg.mkBrush(80, 190, 255, 150))
+            plot.addItem(scatter)
+            text = QtWidgets.QLabel(explanation)
+            text.setWordWrap(True)
+            text.setMinimumWidth(240)
+            self.stage_iq_scatters[name] = scatter
+            row = index // 2
+            column = (index % 2) * 2
+            stage_layout.addWidget(plot, row, column)
+            stage_layout.addWidget(text, row, column + 1)
+        layout.addWidget(stage_group, stretch=1)
 
         self.prompt_plot = pg.PlotWidget(title="Prompt I/Q")
         self.prompt_plot.setToolTip("Prompt I/Q is one complex value per 1 ms after carrier wipeoff and PRN despreading.")
@@ -224,3 +268,15 @@ class TrackingTab(QtWidgets.QWidget):
         self.doppler_curve.setData(time_ms, state.doppler_est_hz)
         self.code_freq_curve.setData(time_ms, state.code_freq_est_hz)
         self.lock_curve.setData(time_ms, state.lock_metric)
+        self._update_iq_stage_views(state)
+
+    def _update_iq_stage_views(self, state: TrackingState) -> None:
+        """Show compact IQ-plane views for each tracking processing stage."""
+
+        for name, scatter in self.stage_iq_scatters.items():
+            values = state.iq_views.get(name, np.empty(0, dtype=np.complex64))
+            if values.size == 0:
+                scatter.setData([], [])
+                continue
+            display, _step = decimate_for_display(values.astype(np.complex64, copy=False), max_points=1_500)
+            scatter.setData(display.real, display.imag)

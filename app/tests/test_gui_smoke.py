@@ -60,8 +60,10 @@ def _make_tracking_state(prn: int) -> TrackingState:
 def test_main_window_smoke() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
-    assert window.tabs.count() == 9
+    assert window.tabs.count() == 10
     assert window.tabs.tabText(1) == "Learning Flow"
+    assert window.tabs.tabText(2) == "Signal Intuition"
+    assert window.concept_lab_tab.current_result is not None
     assert window.session_tab.sample_rate_spin.value() == round(DEFAULT_SAMPLE_RATE_HZ)
     assert window.session_tab.compute_backend_combo.currentData() == "auto"
     assert window.session_tab.worker_spin.value() == 0
@@ -143,6 +145,33 @@ def test_prn_doppler_overview_uses_sparse_axis_labels_for_full_scan() -> None:
 
     assert len(ticks) < 16
     assert ticks[-1] == (31.5, "32")
+
+
+def test_acquisition_peak_slices_use_codephase_and_doppler_axes() -> None:
+    result = _make_acquisition_result(1)
+    result.heatmap = np.asarray(
+        [
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 20.0],
+            [9.0, 10.0, 11.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+    result.doppler_bins_hz = np.asarray([-500.0, 0.0, 500.0], dtype=np.float32)
+    result.best_candidate.doppler_hz = 0.0
+    result.best_candidate.code_phase_samples = 1
+
+    code_axis, code_values, peak_phase, peak_value = AcquisitionTab.codephase_slice(result)
+    doppler_axis, doppler_values, peak_doppler, doppler_peak_value = AcquisitionTab.doppler_slice(result)
+
+    np.testing.assert_allclose(code_axis, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_allclose(code_values, [5.0, 20.0, 7.0, 6.0])
+    assert peak_phase == 1.0
+    assert peak_value == 20.0
+    np.testing.assert_allclose(doppler_axis, [-500.0, 0.0, 500.0])
+    np.testing.assert_allclose(doppler_values, [4.0, 20.0, 12.0])
+    assert peak_doppler == 0.0
+    assert doppler_peak_value == 20.0
 
 
 def test_session_tab_accepts_large_file_sample_ranges() -> None:

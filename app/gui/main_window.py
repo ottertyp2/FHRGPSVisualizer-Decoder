@@ -31,6 +31,7 @@ from app.dsp.tracking import track_file
 from app.dsp.tracking import track_signal
 from app.gui.tabs.acquisition_tab import AcquisitionTab
 from app.gui.tabs.benchmark_tab import BenchmarkTab
+from app.gui.tabs.concept_lab_tab import ConceptLabTab
 from app.gui.tabs.iq_tab import IQPlaneTab
 from app.gui.tabs.learning_tab import LearningTab
 from app.gui.tabs.navigation_tab import NavigationTab
@@ -84,6 +85,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         self.session_tab = SessionTab()
         self.learning_tab = LearningTab()
+        self.concept_lab_tab = ConceptLabTab()
         self.raw_tab = RawSignalTab()
         self.spectrum_tab = SpectrumTab()
         self.iq_tab = IQPlaneTab()
@@ -94,6 +96,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tabs.addTab(self.session_tab, "File / Session")
         self.tabs.addTab(self.learning_tab, "Learning Flow")
+        self.tabs.addTab(self.concept_lab_tab, "Signal Intuition")
         self.tabs.addTab(self.raw_tab, "Raw Signal")
         self.tabs.addTab(self.spectrum_tab, "Spectrum / Waterfall")
         self.tabs.addTab(self.iq_tab, "IQ Plane")
