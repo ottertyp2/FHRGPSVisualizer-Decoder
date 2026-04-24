@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.dsp.bitsync import _carrier_aligned_prompt_ms
 from app.dsp.bitsync import extract_navigation_bits
+from app.dsp.bitsync import form_navigation_bits
 from app.dsp.utils import bits_to_str
 from app.models import BitDecisionResult, NavigationDecodeResult, NavigationWord, TrackingState
 
@@ -116,7 +118,17 @@ def decode_navigation_from_tracking(
     if progress_callback:
         progress_callback(5)
 
-    bit_result = extract_navigation_bits(tracking)
+    bit_candidates = [extract_navigation_bits(tracking)]
+    prompt = tracking.iq_views.get("Integrated prompt")
+    if prompt is not None and prompt.size == tracking.prompt_i.size:
+        bit_candidates.extend(
+            [
+                form_navigation_bits(tracking.prompt_i),
+                form_navigation_bits(tracking.prompt_q),
+                form_navigation_bits(_carrier_aligned_prompt_ms(tracking)),
+            ]
+        )
+    bit_result = bit_candidates[0]
 
     if log_callback:
         log_callback(
@@ -126,6 +138,17 @@ def decode_navigation_from_tracking(
         progress_callback(55)
 
     nav_result = decode_navigation_bits(bit_result)
+    for candidate in bit_candidates[1:]:
+        candidate_nav = decode_navigation_bits(candidate)
+        if (
+            candidate_nav.parity_ok_count,
+            len(candidate_nav.preamble_indices),
+        ) > (
+            nav_result.parity_ok_count,
+            len(nav_result.preamble_indices),
+        ):
+            bit_result = candidate
+            nav_result = candidate_nav
 
     if progress_callback:
         progress_callback(100)

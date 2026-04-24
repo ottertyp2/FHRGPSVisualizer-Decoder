@@ -18,9 +18,10 @@ The project is built to make the decoding chain understandable end to end:
 - separate believable satellite evidence from one-off noise peaks
 - track a selected PRN with readable loop-state plots
 - extract 50 bps navigation bits and inspect LNAV framing/parity
+- solve WGS-84 receiver position from valid satellite positions and pseudoranges
 - benchmark whether a laptop can keep up with large recordings
 
-The application is intentionally focused on offline signal analysis and diagnosis. It does not compute position, pseudoranges, maps, or a full PVT solution.
+The application remains focused on offline signal analysis and diagnosis. It now includes the tested least-squares PVT core needed for a receiver position solution, while map display and network-assisted positioning remain out of scope.
 
 ## Why This Tool Exists
 
@@ -43,17 +44,18 @@ Supported well today:
 - repeated-segment consistency scoring for weak detections
 - automatic survey of common GNSS sample-rate hypotheses
 - IF / search-center sweeps when the capture is not true baseband
-- simple tracking with Early/Prompt/Late correlators
+- simple tracking with Early/Prompt/Late correlators and user-selectable long tracking windows
 - 1 ms prompt integrations and 20 ms bit decisions
 - LNAV preamble detection, word sync, and parity checks
+- WGS-84 ECEF/LLA conversion and least-squares position solving from four or more pseudoranges
 - benchmark of file I/O, FFT, acquisition, and tracking throughput
 
 Out of scope for now:
 
 - live SDR streaming
 - non-`complex64` input as a first-class GUI path
-- GPS position solving or map display
-- full ephemeris interpretation and navigation solutioning
+- map display or network-assisted GNSS
+- claiming a position fix when navigation parity / ephemeris evidence is insufficient
 
 ## Installation
 
@@ -139,8 +141,8 @@ The sample-rate field is freely editable, so you can enter exact recorder values
 
 1. Launch the app with `python -m app.main`.
 2. Open a `.bin` or `.dat` IQ file, or generate the built-in demo signal.
-3. In `File / Session`, set sample rate, signal mode, start sample, and window size.
-   For the latest real sample, use `6.061 MSa/s` (`6061000 Sa/s`).
+3. In `File / Session`, set sample rate, signal mode, start sample, window size, and tracking duration.
+   For the latest real sample, start near `6.061 MSa/s` and use `Auto Detect Capture` to refine nearby recorder-clock offsets.
 4. Click `Preview` to inspect a bounded window before committing to heavier DSP steps.
 5. Go to `Acquisition` and run either a single-PRN acquisition or a PRN scan.
 6. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
@@ -156,6 +158,7 @@ This is the control center for loading data and choosing how much of the source 
 
 - file path and metadata preview
 - sample-rate, baseband/IF, and window controls
+- tracking duration for long navigation-bit captures
 - RAM preload policy
 - preview magnitude plot
 - session log and worker progress
@@ -204,6 +207,10 @@ This view stays PRN-specific and shows:
 - hard bit decisions
 - LNAV preamble detections
 - word labels, parity results, and bit/hex summaries
+
+### PVT Core
+
+The DSP layer includes a tested least-squares WGS-84 solver for four or more satellite pseudoranges. A real position fix should only be trusted after the navigation path has enough parity-valid ephemeris and timing evidence for the selected PRNs.
 
 ### Benchmark
 
@@ -257,7 +264,7 @@ If local files such as `test1.bin` or `test3min.bin` are present, they can be us
 - `app/main.py`: Qt application entry point
 - `app/gui/`: main window, worker plumbing, and tab widgets
 - `app/gui/tabs/`: session, visualization, acquisition, tracking, navigation, and benchmark tabs
-- `app/dsp/`: IQ I/O, PRN generation, acquisition, tracking, bit sync, navigation decode, benchmark logic, and demo generation
+- `app/dsp/`: IQ I/O, PRN generation, acquisition, tracking, bit sync, navigation decode, PVT solving, benchmark logic, and demo generation
 - `app/models/`: shared dataclasses for GUI and DSP state
 - `app/tests/`: DSP tests and GUI smoke tests
 

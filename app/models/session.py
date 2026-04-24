@@ -33,7 +33,7 @@ class SessionConfig:
     integration_ms: int = 80
     spread_acquisition_blocks: bool = False
     acquisition_segment_count: int = 8
-    tracking_ms: int = 400
+    tracking_ms: int = 60_000
     early_late_spacing_chips: float = 0.5
     dll_gain: float = 0.08
     pll_gain: float = 10.0

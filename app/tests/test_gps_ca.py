@@ -13,6 +13,10 @@ def test_generate_ca_code_length_and_values() -> None:
     assert set(np.unique(code)).issubset({-1.0, 1.0})
 
 
+def test_generate_ca_code_is_cached() -> None:
+    assert generate_ca_code(1) is generate_ca_code(1)
+
+
 def test_sample_ca_code_size() -> None:
     sampled = sample_ca_code(3, 4_092_000.0, 4_092)
     assert sampled.shape == (4_092,)

@@ -27,6 +27,7 @@ from app.dsp.io import (
     load_complex64_samples_with_progress,
 )
 from app.dsp.navdecode import decode_navigation_from_tracking
+from app.dsp.tracking import track_file
 from app.dsp.tracking import track_signal
 from app.gui.tabs.acquisition_tab import AcquisitionTab
 from app.gui.tabs.benchmark_tab import BenchmarkTab
@@ -663,6 +664,11 @@ class MainWindow(QtWidgets.QMainWindow):
         common_rates = list(COMMON_GNSS_SAMPLE_RATES)
         if self.session.sample_rate not in common_rates:
             common_rates.append(float(self.session.sample_rate))
+        refinement_offsets = (-1_000.0, -750.0, -600.0, -500.0, -400.0, -250.0, 250.0, 400.0, 500.0, 600.0, 750.0, 1_000.0)
+        refinement_bases = {float(self.session.sample_rate), 6_061_000.0}
+        for base_rate in refinement_bases:
+            if base_rate > 1_000_000.0:
+                common_rates.extend(base_rate + offset for offset in refinement_offsets)
         common_rates = sorted(set(common_rates))
         worker = Worker(
             survey_sample_rates,
@@ -884,13 +890,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session.prn = selected_prn
         self.tracking_tab.set_task_message(f"Tracking PRN {selected_prn}.")
         self.tracking_tab.set_task_progress(0)
-        source_samples = self.ensure_samples()
         start_offset = int(acquisition.best_candidate.segment_start_sample)
-        samples = source_samples[start_offset:] if start_offset < source_samples.size else source_samples
-        if samples.size == 0:
-            return
         self.tabs.setCurrentWidget(self.tracking_tab)
-        worker = Worker(track_signal, samples, self.session, acquisition)
+        if (
+            self.session.file_path
+            and self.session.file_path != "<demo>"
+            and not self.session_tab.preload_enabled()
+        ):
+            absolute_start = int(self.session.start_sample) + start_offset
+            worker = Worker(track_file, self.session.file_path, absolute_start, self.session, acquisition)
+        else:
+            source_samples = self.ensure_samples()
+            samples = source_samples[start_offset:] if start_offset < source_samples.size else source_samples
+            if samples.size == 0:
+                return
+            worker = Worker(track_signal, samples, self.session, acquisition)
         self._start_worker(
             worker,
             self._on_tracking_finished,

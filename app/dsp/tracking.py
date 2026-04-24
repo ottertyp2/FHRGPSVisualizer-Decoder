@@ -11,6 +11,12 @@ from app.dsp.io import Complex64FileSource
 from app.models import AcquisitionResult, SessionConfig, TrackingState
 
 
+def _sample_index_for_ms(ms_index: int, sample_rate: float) -> int:
+    """Return the nearest sample index for an integer millisecond boundary."""
+
+    return int(round(int(ms_index) * float(sample_rate) * 1e-3))
+
+
 def _track_blocks(
     blocks: Iterable[np.ndarray],
     session: SessionConfig,
@@ -51,6 +57,7 @@ def _track_blocks(
     despread_preview = np.empty(0, dtype=np.complex64)
 
     valid_count = 0
+    block_time = np.arange(samples_per_ms, dtype=np.float64) / session.sample_rate
 
     for ms_index, block in enumerate(blocks):
         if ms_index >= max_ms:
@@ -58,7 +65,6 @@ def _track_blocks(
         if block.size < samples_per_ms:
             break
 
-        block_time = np.arange(samples_per_ms, dtype=np.float64) / session.sample_rate
         carrier = np.exp(-1j * (carrier_phase + 2.0 * np.pi * carrier_freq * block_time))
         wiped = block * carrier
 
@@ -90,7 +96,7 @@ def _track_blocks(
         prompt_history[ms_index] = np.complex64(prompt)
 
         dll_disc = (np.abs(early) - np.abs(late)) / (np.abs(early) + np.abs(late) + 1e-12)
-        pll_disc = np.arctan2(prompt.imag, prompt.real)
+        pll_disc = np.arctan2(prompt.imag, np.abs(prompt.real) + 1e-12)
         code_error[ms_index] = float(dll_disc)
         carrier_error[ms_index] = float(pll_disc)
 
@@ -174,10 +180,12 @@ def track_signal(
         raise ValueError("No samples available for tracking.")
 
     samples_per_ms = int(round(session.sample_rate * 1e-3))
-    max_ms = min(int(session.tracking_ms), samples.size // samples_per_ms)
+    available_ms = int(np.floor(samples.size / max(session.sample_rate * 1e-3, 1e-9)))
+    max_ms = min(int(session.tracking_ms), available_ms)
     blocks = (
         samples[start : start + samples_per_ms]
-        for start in range(0, max_ms * samples_per_ms, samples_per_ms)
+        for start in (_sample_index_for_ms(ms_index, session.sample_rate) for ms_index in range(max_ms))
+        if start + samples_per_ms <= samples.size
     )
     return _track_blocks(
         blocks,
@@ -202,11 +210,17 @@ def track_file(
 
     source = Complex64FileSource(file_path)
     samples_per_ms = int(round(session.sample_rate * 1e-3))
-    available_ms = max(0, (source.total_samples - int(start_sample)) // samples_per_ms)
+    available_ms = int(np.floor(max(0, source.total_samples - int(start_sample)) / max(session.sample_rate * 1e-3, 1e-9)))
     max_ms = min(int(session.tracking_ms), int(available_ms))
     raw_preview = source.read_window(start_sample, min(4_000, samples_per_ms))
+
+    def iter_ms_blocks():
+        for ms_index in range(max_ms):
+            block_start = int(start_sample) + _sample_index_for_ms(ms_index, session.sample_rate)
+            yield source.read_window(block_start, samples_per_ms)
+
     return _track_blocks(
-        source.iter_blocks(start_sample, samples_per_ms, max_ms),
+        iter_ms_blocks(),
         session,
         acquisition,
         max_ms=max_ms,

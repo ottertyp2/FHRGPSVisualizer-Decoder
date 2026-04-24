@@ -78,6 +78,16 @@ class SessionTab(QtWidgets.QWidget):
         self.sample_count_spin.setSingleStep(1_000.0)
         self.sample_count_spin.setRange(1.0, self.LARGE_SAMPLE_LIMIT)
         self.sample_count_spin.setValue(float(DEFAULT_WINDOW_SAMPLES))
+        self.tracking_duration_spin = QtWidgets.QDoubleSpinBox()
+        self.tracking_duration_spin.setRange(0.4, 600.0)
+        self.tracking_duration_spin.setDecimals(1)
+        self.tracking_duration_spin.setSingleStep(1.0)
+        self.tracking_duration_spin.setValue(60.0)
+        self.tracking_duration_spin.setSuffix(" s")
+        self.tracking_duration_spin.setToolTip(
+            "How long one selected PRN should be tracked. "
+            "Navigation decoding needs several 6 s LNAV subframes, so real captures usually need 30 s or more."
+        )
         self.preload_checkbox = QtWidgets.QCheckBox("Preload full source to RAM")
         self.preload_checkbox.setChecked(True)
         self.preload_checkbox.setToolTip(
@@ -115,6 +125,7 @@ class SessionTab(QtWidgets.QWidget):
         form.addRow("GPU use", self.gpu_checkbox)
         form.addRow("Start sample", self.start_sample_spin)
         form.addRow("Window samples", self.sample_count_spin)
+        form.addRow("Tracking duration", self.tracking_duration_spin)
         form.addRow("RAM preload", self.preload_checkbox)
         layout.addLayout(form)
 
@@ -188,6 +199,7 @@ class SessionTab(QtWidgets.QWidget):
         self.gpu_checkbox.toggled.connect(lambda *_: self.settings_changed.emit())
         self.start_sample_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.sample_count_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
+        self.tracking_duration_spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.preload_checkbox.toggled.connect(lambda *_: self.settings_changed.emit())
         self.baseband_checkbox.toggled.connect(self._on_baseband_toggled)
         self._on_baseband_toggled(self.baseband_checkbox.isChecked())
@@ -229,6 +241,7 @@ class SessionTab(QtWidgets.QWidget):
             gpu_enabled=self.gpu_checkbox.isChecked(),
             start_sample=int(self.start_sample_spin.value()),
             sample_count=int(self.sample_count_spin.value()),
+            tracking_ms=int(round(self.tracking_duration_spin.value() * 1_000.0)),
         )
 
     def set_file_path(self, file_path: str) -> None:

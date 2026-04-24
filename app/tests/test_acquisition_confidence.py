@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.dsp.acquisition import _cluster_segment_candidates
 from app.dsp.acquisition import acquisition_interpretation, acquisition_rank_key
 from app.models import AcquisitionCandidate, AcquisitionResult
 
@@ -54,3 +55,27 @@ def test_interpretation_requires_strong_metric_for_plausible_label() -> None:
 
     assert acquisition_interpretation(weak_repeated) == "repeated but still weak"
     assert acquisition_interpretation(strong_repeated) == "repeated / plausible"
+
+
+def test_segment_consistency_allows_smooth_code_phase_drift() -> None:
+    candidates = [
+        AcquisitionCandidate(
+            prn=30,
+            doppler_hz=250.0,
+            carrier_frequency_hz=250.0,
+            code_phase_samples=(900 + index * 280) % 6061,
+            metric=20.0,
+            segment_start_sample=index * 4_294_000,
+        )
+        for index in range(6)
+    ]
+
+    cluster, score = _cluster_segment_candidates(
+        candidates,
+        doppler_tolerance_hz=750.0,
+        code_phase_tolerance_samples=190,
+        code_period_samples=6061,
+    )
+
+    assert len(cluster) == len(candidates)
+    assert score > 0.0

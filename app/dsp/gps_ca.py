@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 
 
@@ -44,6 +46,7 @@ CA_CODE_LENGTH = 1023
 CA_CODE_RATE_HZ = 1.023e6
 
 
+@lru_cache(maxsize=32)
 def generate_ca_code(prn: int) -> np.ndarray:
     """Generate one 1023-chip GPS L1 C/A PRN code as +/-1 values."""
 

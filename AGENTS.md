@@ -32,7 +32,7 @@ Agents working here should preserve the project's core priorities:
 - support for large recordings through windowed reads and streaming
 - keep ambiguous real-world captures diagnosable through sample-rate surveys and segment-consistency evidence
 - optional multi-core CPU and GPU acceleration that still preserves understandable DSP paths and CPU fallback
-- no PVT or position solution unless explicitly added later
+- PVT / position solving is now explicitly in scope when backed by decoded navigation data and testable pseudorange inputs
 
 ## Project structure
 
@@ -51,7 +51,7 @@ Agents working here should preserve the project's core priorities:
 - Treat `complex64` little-endian IQ as the current baseline input format unless the repo is explicitly extended.
 - Preserve the real-capture diagnosis path: sample-rate hypotheses, repeated-segment evidence, and per-PRN explanations should stay understandable in the GUI.
 - Keep optional compute acceleration understandable: CPU execution must remain supported, and GPU-specific logic should stay isolated from the teaching-oriented DSP flow.
-- Do not add position solving, maps, or full PVT implicitly.
+- Do not add maps or network-assisted positioning implicitly; keep PVT logic offline, testable, and tied to decoded navigation evidence.
 - Preserve the benchmark path so laptop suitability remains visible inside the GUI.
 - Keep PRN-specific acquisition, tracking, and navigation evidence understandable and visually separated when possible.
 - Add or update tests for new DSP behavior whenever practical.

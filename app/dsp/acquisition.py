@@ -28,6 +28,12 @@ from app.models import (
 STRONG_ACQUISITION_METRIC_THRESHOLD = 6.0
 
 
+def _sample_index_for_ms(ms_index: int, sample_rate: float) -> int:
+    """Return the nearest sample index for an integer millisecond boundary."""
+
+    return int(round(int(ms_index) * float(sample_rate) * 1e-3))
+
+
 @dataclass(slots=True)
 class AcquisitionConfig:
     """Compact acquisition settings."""
@@ -67,8 +73,10 @@ def _select_ms_blocks(
 
     blocks = np.empty((usable, samples_per_ms), dtype=np.complex64)
     for row, start_ms in enumerate(starts_ms):
-        start = int(start_ms) * samples_per_ms
+        start = _sample_index_for_ms(int(start_ms), sample_rate)
         stop = start + samples_per_ms
+        if stop > samples.size:
+            return blocks[:row]
         blocks[row, :] = samples[start:stop]
     return blocks
 
@@ -87,11 +95,50 @@ def _cluster_segment_candidates(
     candidates: list[AcquisitionCandidate],
     doppler_tolerance_hz: float,
     code_phase_tolerance_samples: int,
+    code_period_samples: int,
 ) -> tuple[list[AcquisitionCandidate], float]:
     """Find the dominant cluster of repeated PRN hits across searched segments."""
 
     if not candidates:
         return [], 0.0
+
+    def circular_distance(left: int, right: int) -> int:
+        period = max(1, int(code_period_samples))
+        delta = abs(int(left) - int(right)) % period
+        return min(delta, period - delta)
+
+    def unwrap_code_phases(cluster: list[AcquisitionCandidate]) -> np.ndarray:
+        period = max(1, int(code_period_samples))
+        phases: list[float] = []
+        for candidate in sorted(cluster, key=lambda item: item.segment_start_sample):
+            phase = float(candidate.code_phase_samples % period)
+            if phases:
+                previous = phases[-1]
+                wraps = round((previous - phase) / period)
+                phase += wraps * period
+                if phase - previous > period / 2.0:
+                    phase -= period
+                elif previous - phase > period / 2.0:
+                    phase += period
+            phases.append(phase)
+        return np.asarray(phases, dtype=np.float64)
+
+    def smooth_code_drift_score(cluster: list[AcquisitionCandidate]) -> float:
+        if len(cluster) < 3:
+            return 0.0
+        ordered = sorted(cluster, key=lambda item: item.segment_start_sample)
+        times = np.asarray([item.segment_start_sample for item in ordered], dtype=np.float64)
+        times = (times - times[0]) / max(float(code_period_samples), 1.0)
+        phases = unwrap_code_phases(ordered)
+        if np.ptp(times) <= 0.0:
+            return 0.0
+        slope, intercept = np.polyfit(times, phases, deg=1)
+        residual = phases - (slope * times + intercept)
+        rms = float(np.sqrt(np.mean(residual**2)))
+        tolerance = max(float(code_phase_tolerance_samples), float(code_period_samples) * 0.03)
+        if rms > tolerance:
+            return 0.0
+        return max(0.1, 1.0 - rms / max(tolerance, 1.0))
 
     best_cluster: list[AcquisitionCandidate] = []
     best_score = -np.inf
@@ -100,9 +147,16 @@ def _cluster_segment_candidates(
             candidate
             for candidate in candidates
             if abs(candidate.doppler_hz - seed.doppler_hz) <= doppler_tolerance_hz
-            and abs(candidate.code_phase_samples - seed.code_phase_samples) <= code_phase_tolerance_samples
         ]
-        score = float(len(cluster)) * float(np.mean([candidate.metric for candidate in cluster]))
+        drift_score = smooth_code_drift_score(cluster)
+        if drift_score <= 0.0:
+            cluster = [
+                candidate
+                for candidate in cluster
+                if circular_distance(candidate.code_phase_samples, seed.code_phase_samples) <= code_phase_tolerance_samples
+            ]
+            drift_score = 1.0 if cluster else 0.0
+        score = float(len(cluster)) * float(np.mean([candidate.metric for candidate in cluster])) * drift_score
         if score > best_score:
             best_cluster = cluster
             best_score = score
@@ -158,7 +212,7 @@ def _segment_blocks_for_start(
     """Return normalized 1 ms acquisition blocks for one segment start."""
 
     samples_per_ms = int(round(sample_rate * 1e-3))
-    segment_start = int(segment_start_ms) * samples_per_ms
+    segment_start = _sample_index_for_ms(int(segment_start_ms), sample_rate)
     if config.acquisition_segment_count > 1:
         segment_stop = min(samples.size, segment_start + max(1, int(config.integration_ms)) * samples_per_ms)
         segment_samples = np.asarray(samples[segment_start:segment_stop], dtype=np.complex64)
@@ -187,11 +241,10 @@ def _compute_heatmap_row(
     """Return one Doppler row of the acquisition heatmap."""
 
     search_frequency_hz = search_center_hz + float(doppler)
-    metrics = np.zeros(selected_blocks.shape[1], dtype=np.float64)
-    for block in selected_blocks:
-        wiped = block * np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector)
-        correlation = np.fft.ifft(np.fft.fft(wiped) * code_fft)
-        metrics += np.abs(correlation) ** 2
+    carrier = np.exp(-1j * 2.0 * np.pi * search_frequency_hz * time_vector).astype(np.complex64)
+    wiped = selected_blocks * carrier[np.newaxis, :]
+    correlation = np.fft.ifft(np.fft.fft(wiped, axis=1) * code_fft[np.newaxis, :], axis=1)
+    metrics = np.sum(np.abs(correlation) ** 2, axis=0)
     return metrics.astype(np.float32)
 
 
@@ -318,7 +371,7 @@ def acquire_signal(
     samples_per_ms = int(round(sample_rate * 1e-3))
     if samples_per_ms <= 0:
         raise ValueError("Sample rate is too low for 1 ms acquisition blocks.")
-    total_ms = samples.size // samples_per_ms
+    total_ms = int(np.floor(samples.size / max(sample_rate * 1e-3, 1e-9)))
     if total_ms <= 0:
         raise ValueError("Selected sample window is shorter than one 1 ms acquisition block.")
 
@@ -379,7 +432,7 @@ def acquire_signal(
             carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
             code_phase_samples=code_phase,
             metric=float(metric),
-            segment_start_sample=int(segment_start_ms * samples_per_ms),
+            segment_start_sample=_sample_index_for_ms(int(segment_start_ms), sample_rate),
         )
         segment_candidates.append(segment_best)
         if metric > best_metric:
@@ -401,19 +454,20 @@ def acquire_signal(
         carrier_frequency_hz=float(config.search_center_hz + doppler_bins[best_row]),
         code_phase_samples=int((samples_per_ms - best_col) % samples_per_ms),
         metric=float(best_metric),
-        segment_start_sample=int(best_segment_start_ms * samples_per_ms),
+        segment_start_sample=_sample_index_for_ms(int(best_segment_start_ms), sample_rate),
     )
 
     dominant_cluster, consistency_score = _cluster_segment_candidates(
         segment_candidates,
         doppler_tolerance_hz=max(float(config.doppler_step) * 2.0, 750.0),
         code_phase_tolerance_samples=max(25, samples_per_ms // 32),
+        code_period_samples=samples_per_ms,
     )
     consistent_segments = len(dominant_cluster)
     if dominant_cluster:
         dominant_cluster = sorted(dominant_cluster, key=lambda candidate: candidate.metric, reverse=True)
         best = dominant_cluster[0]
-        best_segment_start_ms = int(best.segment_start_sample // samples_per_ms)
+        best_segment_start_ms = int(round(best.segment_start_sample / max(sample_rate * 1e-3, 1e-9)))
         selected_blocks = _segment_blocks_for_start(samples, sample_rate, config, best_segment_start_ms)
         if selected_blocks.size:
             best_usable = int(selected_blocks.shape[0])
@@ -442,7 +496,7 @@ def acquire_signal(
                 doppler_hz=float(doppler_bins[row]),
                 carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
                 code_phase_samples=code_phase,
-                segment_start_sample=int(best_segment_start_ms * samples_per_ms),
+                segment_start_sample=_sample_index_for_ms(int(best_segment_start_ms), sample_rate),
                 metric=float(heatmap[row, col] / noise_floor),
             )
         )
@@ -704,11 +758,11 @@ def survey_sample_rates(
     def build_local_session(base_session: SessionConfig, sample_rate_hz: float) -> SessionConfig:
         local_session = replace(base_session)
         local_session.sample_rate = float(sample_rate_hz)
-        local_session.doppler_min = min(int(base_session.doppler_min), -20_000)
-        local_session.doppler_max = max(int(base_session.doppler_max), 20_000)
+        local_session.doppler_min = min(int(base_session.doppler_min), -12_000)
+        local_session.doppler_max = max(int(base_session.doppler_max), 12_000)
         local_session.doppler_step = max(int(base_session.doppler_step), 500)
-        local_session.integration_ms = min(max(int(base_session.integration_ms), 20), 80)
-        local_session.acquisition_segment_count = max(int(base_session.acquisition_segment_count), 6)
+        local_session.integration_ms = min(max(int(base_session.integration_ms), 20), 40)
+        local_session.acquisition_segment_count = max(int(base_session.acquisition_segment_count), 4)
         local_session.spread_acquisition_blocks = False
         return local_session
 
