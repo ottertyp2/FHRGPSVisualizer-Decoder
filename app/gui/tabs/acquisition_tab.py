@@ -27,15 +27,32 @@ class AcquisitionTab(QtWidgets.QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QtWidgets.QVBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        help_label = QtWidgets.QLabel(
-            f"{TOOLTIPS['ca_code']} {TOOLTIPS['despreading']}"
-        )
+        root_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        root_splitter.setChildrenCollapsible(False)
+        layout.addWidget(root_splitter)
+
+        sidebar_scroll = QtWidgets.QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        sidebar_scroll.setMinimumWidth(300)
+        sidebar_scroll.setMaximumWidth(430)
+        sidebar = QtWidgets.QWidget()
+        sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 8, 0)
+        sidebar_layout.setSpacing(8)
+        sidebar_scroll.setWidget(sidebar)
+
+        help_label = QtWidgets.QLabel(f"{TOOLTIPS['ca_code']} {TOOLTIPS['despreading']}")
         help_label.setWordWrap(True)
-        layout.addWidget(help_label)
+        sidebar_layout.addWidget(help_label)
 
-        controls = QtWidgets.QFormLayout()
+        setup_group = QtWidgets.QGroupBox("Search setup")
+        controls = QtWidgets.QFormLayout(setup_group)
+        controls.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
         self.prn_spin = QtWidgets.QSpinBox()
         self.prn_spin.setRange(1, 32)
         self.prn_spin.setValue(1)
@@ -74,10 +91,11 @@ class AcquisitionTab(QtWidgets.QWidget):
         controls.addRow("Accumulation", self.integration_spin)
         controls.addRow("Deep search", self.segment_count_spin)
         controls.addRow("Weak-signal mode", self.spread_blocks_checkbox)
-        layout.addLayout(controls)
+        sidebar_layout.addWidget(setup_group)
 
-        sweep_group = QtWidgets.QGroupBox("Auto-search IF / center sweep")
+        sweep_group = QtWidgets.QGroupBox("IF / sample-rate search")
         sweep_layout = QtWidgets.QFormLayout(sweep_group)
+        sweep_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
         self.center_min_spin = QtWidgets.QSpinBox()
         self.center_min_spin.setRange(-100_000, 100_000)
         self.center_min_spin.setValue(-10_000)
@@ -94,43 +112,180 @@ class AcquisitionTab(QtWidgets.QWidget):
         sweep_layout.addRow("Center step [Hz]", self.center_step_spin)
         sweep_layout.addRow(self.center_sweep_button)
         sweep_layout.addRow(self.auto_detect_button)
-        layout.addWidget(sweep_group)
+        sidebar_layout.addWidget(sweep_group)
 
-        action_row = QtWidgets.QHBoxLayout()
+        action_group = QtWidgets.QGroupBox("Run")
+        action_layout = QtWidgets.QVBoxLayout(action_group)
         self.run_button = QtWidgets.QPushButton("Run Acquisition For PRN")
         self.scan_button = QtWidgets.QPushButton("Scan PRN List")
         self.track_button = QtWidgets.QPushButton("Track Highlighted PRN")
-        action_row.addWidget(self.run_button)
-        action_row.addWidget(self.scan_button)
-        action_row.addWidget(self.track_button)
-        action_row.addStretch()
-        layout.addLayout(action_row)
+        action_layout.addWidget(self.run_button)
+        action_layout.addWidget(self.scan_button)
+        action_layout.addWidget(self.track_button)
+        sidebar_layout.addWidget(action_group)
 
+        status_group = QtWidgets.QGroupBox("Status")
+        status_layout = QtWidgets.QVBoxLayout(status_group)
         self.task_status_label = QtWidgets.QLabel("Acquisition idle.")
         self.task_status_label.setWordWrap(True)
-        layout.addWidget(self.task_status_label)
-
         self.task_progress_bar = QtWidgets.QProgressBar()
         self.task_progress_bar.setRange(0, 100)
         self.task_progress_bar.setValue(0)
-        layout.addWidget(self.task_progress_bar)
+        status_layout.addWidget(self.task_status_label)
+        status_layout.addWidget(self.task_progress_bar)
+        sidebar_layout.addWidget(status_group)
 
-        self.summary_label = QtWidgets.QLabel("No acquisition result yet. Run one PRN or scan multiple PRNs.")
-        self.summary_label.setWordWrap(True)
-        layout.addWidget(self.summary_label)
-
-        self.selected_prn_label = QtWidgets.QLabel("Selected PRN: none")
-        self.selected_prn_label.setWordWrap(True)
-        layout.addWidget(self.selected_prn_label)
+        guide_group = QtWidgets.QGroupBox("Quick guide")
+        guide_layout = QtWidgets.QVBoxLayout(guide_group)
         self.stage_hint_label = QtWidgets.QLabel(
             "Acquisition tries one PRN code at many Doppler bins and code phases. "
             "A bright heatmap peak means this PRN, this Doppler, and this code timing match the recording best."
         )
         self.stage_hint_label.setWordWrap(True)
-        layout.addWidget(self.stage_hint_label)
+        guide_layout.addWidget(self.stage_hint_label)
+        sidebar_layout.addWidget(guide_group)
+        sidebar_layout.addStretch()
 
-        what_group = QtWidgets.QGroupBox("What am I seeing?")
-        what_layout = QtWidgets.QVBoxLayout(what_group)
+        root_splitter.addWidget(sidebar_scroll)
+
+        workspace = QtWidgets.QWidget()
+        workspace_layout = QtWidgets.QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(8)
+
+        self.summary_label = QtWidgets.QLabel("No acquisition result yet. Run one PRN or scan multiple PRNs.")
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setMaximumHeight(72)
+        workspace_layout.addWidget(self.summary_label)
+
+        self.selected_prn_label = QtWidgets.QLabel("Selected PRN: none")
+        self.selected_prn_label.setWordWrap(True)
+        self.selected_prn_label.setMaximumHeight(56)
+        workspace_layout.addWidget(self.selected_prn_label)
+
+        workspace_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        workspace_splitter.setChildrenCollapsible(False)
+        workspace_layout.addWidget(workspace_splitter, stretch=1)
+
+        self.heatmap_plot = pg.PlotWidget(title="PRN / code phase vs Doppler")
+        self.heatmap_plot.setMinimumHeight(360)
+        self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.heatmap_plot.setLabel("left", "Code phase", units="samples")
+        self.heatmap_image = pg.ImageItem(axisOrder="row-major")
+        self.heatmap_plot.addItem(self.heatmap_image)
+        self.peak_scatter = pg.ScatterPlotItem()
+        self.heatmap_plot.addItem(self.peak_scatter)
+        self.selected_prn_line = pg.InfiniteLine(
+            angle=0,
+            movable=False,
+            pen=pg.mkPen("#ffd43b", width=2),
+        )
+        self.selected_prn_line.setVisible(False)
+        self.heatmap_plot.addItem(self.selected_prn_line)
+        workspace_splitter.addWidget(self.heatmap_plot)
+
+        self.detail_tabs = QtWidgets.QTabWidget()
+        self.detail_tabs.setDocumentMode(True)
+        workspace_splitter.addWidget(self.detail_tabs)
+
+        self.satellite_page = QtWidgets.QWidget()
+        satellite_layout = QtWidgets.QVBoxLayout(self.satellite_page)
+        self.satellite_hint_label = QtWidgets.QLabel(
+            "Click a PRN row to inspect that satellite candidate. Then use Track Highlighted PRN to follow its code and carrier over time."
+        )
+        self.satellite_hint_label.setWordWrap(True)
+        satellite_layout.addWidget(self.satellite_hint_label)
+        self.satellite_table = QtWidgets.QTableWidget(0, 9)
+        self._configure_table(self.satellite_table, minimum_height=260)
+        self.satellite_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.satellite_table.setHorizontalHeaderLabels(
+            [
+                "PRN",
+                "Metric",
+                "Consistent segs",
+                "Search freq [Hz]",
+                "Rel. Doppler [Hz]",
+                "Code phase",
+                "Tracking",
+                "Navigation",
+                "Interpretation",
+            ]
+        )
+        self.satellite_table.horizontalHeader().setStretchLastSection(True)
+        satellite_layout.addWidget(self.satellite_table, stretch=1)
+        self.detail_tabs.addTab(self.satellite_page, "Satellites")
+
+        slice_page = QtWidgets.QWidget()
+        slice_layout = QtWidgets.QHBoxLayout(slice_page)
+        self.codephase_slice_plot = pg.PlotWidget(title="Codephase slice at best Doppler")
+        self.codephase_slice_plot.setMinimumHeight(240)
+        self.codephase_slice_plot.setToolTip(
+            "Shows correlation over codephase while Doppler is fixed at the selected peak."
+        )
+        self.codephase_slice_plot.setLabel("bottom", "Code phase", units="samples")
+        self.codephase_slice_plot.setLabel("left", "Correlation")
+        self.codephase_slice_curve = self.codephase_slice_plot.plot(pen="y")
+        self.codephase_slice_peak = pg.ScatterPlotItem(size=8, pen=pg.mkPen("#111111"), brush=pg.mkBrush("#ffd43b"))
+        self.codephase_slice_plot.addItem(self.codephase_slice_peak)
+        self.doppler_slice_plot = pg.PlotWidget(title="Doppler slice at best codephase")
+        self.doppler_slice_plot.setMinimumHeight(240)
+        self.doppler_slice_plot.setToolTip(
+            "Shows correlation over Doppler while codephase is fixed at the selected peak."
+        )
+        self.doppler_slice_plot.setLabel("bottom", "Relative Doppler", units="Hz")
+        self.doppler_slice_plot.setLabel("left", "Correlation")
+        self.doppler_slice_curve = self.doppler_slice_plot.plot(pen="c")
+        self.doppler_slice_peak = pg.ScatterPlotItem(size=8, pen=pg.mkPen("#111111"), brush=pg.mkBrush("#ffd43b"))
+        self.doppler_slice_plot.addItem(self.doppler_slice_peak)
+        slice_layout.addWidget(self.codephase_slice_plot)
+        slice_layout.addWidget(self.doppler_slice_plot)
+        self.detail_tabs.addTab(slice_page, "Peak Slices")
+
+        candidates_page = QtWidgets.QWidget()
+        candidates_layout = QtWidgets.QVBoxLayout(candidates_page)
+        self.peak_hint_label = QtWidgets.QLabel(
+            "When multiple PRNs were scanned, the heatmap has exactly one row per scanned PRN. "
+            "Brightness is the best code-phase match at that Doppler; weak best-noise peaks are darkened. "
+            "Yellow marks the selected PRN, green marks plausible repeated candidates."
+        )
+        self.peak_hint_label.setWordWrap(True)
+        candidates_layout.addWidget(self.peak_hint_label)
+        self.candidate_table = QtWidgets.QTableWidget(0, 5)
+        self._configure_table(self.candidate_table, minimum_height=220)
+        self.candidate_table.setHorizontalHeaderLabels(["PRN", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Metric"])
+        self.candidate_table.horizontalHeader().setStretchLastSection(True)
+        candidates_layout.addWidget(self.candidate_table, stretch=1)
+        self.detail_tabs.addTab(candidates_page, "Selected PRN Peaks")
+
+        self.survey_page = QtWidgets.QWidget()
+        survey_layout = QtWidgets.QHBoxLayout(self.survey_page)
+        rate_group = QtWidgets.QGroupBox("Best sample-rate hypotheses")
+        rate_layout = QtWidgets.QVBoxLayout(rate_group)
+        self.rate_table = QtWidgets.QTableWidget(0, 6)
+        self._configure_table(self.rate_table, minimum_height=220)
+        self.rate_table.setHorizontalHeaderLabels(["Sample rate [Sa/s]", "Best PRN", "Consistent segs", "Score", "Metric", "Search freq [Hz]"])
+        self.rate_table.horizontalHeader().setStretchLastSection(True)
+        rate_layout.addWidget(self.rate_table)
+        center_group = QtWidgets.QGroupBox("Best IF / search-center hypotheses")
+        center_layout = QtWidgets.QVBoxLayout(center_group)
+        self.center_table = QtWidgets.QTableWidget(0, 5)
+        self._configure_table(self.center_table, minimum_height=220)
+        self.center_table.setHorizontalHeaderLabels(["Center [Hz]", "Best PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]"])
+        self.center_table.horizontalHeader().setStretchLastSection(True)
+        center_layout.addWidget(self.center_table)
+        survey_layout.addWidget(rate_group)
+        survey_layout.addWidget(center_group)
+        self.detail_tabs.addTab(self.survey_page, "Sample / IF Survey")
+
+        evidence_page = QtWidgets.QWidget()
+        evidence_layout = QtWidgets.QVBoxLayout(evidence_page)
+        self.evidence_text = QtWidgets.QPlainTextEdit()
+        self.evidence_text.setReadOnly(True)
+        evidence_layout.addWidget(self.evidence_text)
+        self.detail_tabs.addTab(evidence_page, "Evidence")
+
+        guide_page = QtWidgets.QWidget()
+        what_layout = QtWidgets.QVBoxLayout(guide_page)
         self.what_label = QtWidgets.QLabel(
             "This view searches one PRN over Doppler and code phase. "
             "For each Doppler bin, the assumed carrier rotation is removed; then the local PRN code is shifted and correlated. "
@@ -148,114 +303,17 @@ class AcquisitionTab(QtWidgets.QWidget):
         )
         self.axis_help_label.setWordWrap(True)
         what_layout.addWidget(self.axis_help_label)
-        layout.addWidget(what_group)
+        what_layout.addStretch()
+        self.detail_tabs.addTab(guide_page, "Guide")
 
-        splitter = QtWidgets.QSplitter()
-        splitter.setOrientation(QtCore.Qt.Horizontal)
+        workspace_splitter.setStretchFactor(0, 3)
+        workspace_splitter.setStretchFactor(1, 2)
+        workspace_splitter.setSizes([560, 360])
 
-        left_panel = QtWidgets.QWidget()
-        left_layout = QtWidgets.QVBoxLayout(left_panel)
-        self.heatmap_plot = pg.PlotWidget(title="PRN / code phase vs Doppler")
-        self.heatmap_plot.setLabel("bottom", "Relative Doppler", units="Hz")
-        self.heatmap_plot.setLabel("left", "Code phase", units="samples")
-        self.heatmap_image = pg.ImageItem(axisOrder="row-major")
-        self.heatmap_plot.addItem(self.heatmap_image)
-        self.peak_scatter = pg.ScatterPlotItem()
-        self.heatmap_plot.addItem(self.peak_scatter)
-        self.selected_prn_line = pg.InfiniteLine(
-            angle=0,
-            movable=False,
-            pen=pg.mkPen("#ffd43b", width=2),
-        )
-        self.selected_prn_line.setVisible(False)
-        self.heatmap_plot.addItem(self.selected_prn_line)
-        left_layout.addWidget(self.heatmap_plot, stretch=1)
-
-        slice_group = QtWidgets.QGroupBox("Peak detail slices")
-        slice_layout = QtWidgets.QHBoxLayout(slice_group)
-        self.codephase_slice_plot = pg.PlotWidget(title="Codephase slice at best Doppler")
-        self.codephase_slice_plot.setToolTip(
-            "Shows correlation over codephase while Doppler is fixed at the selected peak."
-        )
-        self.codephase_slice_plot.setLabel("bottom", "Code phase", units="samples")
-        self.codephase_slice_plot.setLabel("left", "Correlation")
-        self.codephase_slice_curve = self.codephase_slice_plot.plot(pen="y")
-        self.codephase_slice_peak = pg.ScatterPlotItem(size=8, pen=pg.mkPen("#111111"), brush=pg.mkBrush("#ffd43b"))
-        self.codephase_slice_plot.addItem(self.codephase_slice_peak)
-        self.doppler_slice_plot = pg.PlotWidget(title="Doppler slice at best codephase")
-        self.doppler_slice_plot.setToolTip(
-            "Shows correlation over Doppler while codephase is fixed at the selected peak."
-        )
-        self.doppler_slice_plot.setLabel("bottom", "Relative Doppler", units="Hz")
-        self.doppler_slice_plot.setLabel("left", "Correlation")
-        self.doppler_slice_curve = self.doppler_slice_plot.plot(pen="c")
-        self.doppler_slice_peak = pg.ScatterPlotItem(size=8, pen=pg.mkPen("#111111"), brush=pg.mkBrush("#ffd43b"))
-        self.doppler_slice_plot.addItem(self.doppler_slice_peak)
-        slice_layout.addWidget(self.codephase_slice_plot)
-        slice_layout.addWidget(self.doppler_slice_plot)
-        left_layout.addWidget(slice_group, stretch=1)
-
-        self.peak_hint_label = QtWidgets.QLabel(
-            "When multiple PRNs were scanned, the heatmap has exactly one row per scanned PRN. "
-            "Brightness is the best code-phase match at that Doppler; weak best-noise peaks are darkened. "
-            "Yellow marks the selected PRN, green marks plausible repeated candidates."
-        )
-        self.peak_hint_label.setWordWrap(True)
-        left_layout.addWidget(self.peak_hint_label)
-        self.candidate_table = QtWidgets.QTableWidget(0, 5)
-        self.candidate_table.setHorizontalHeaderLabels(["PRN", "Search freq [Hz]", "Rel. Doppler [Hz]", "Code phase", "Metric"])
-        self.candidate_table.horizontalHeader().setStretchLastSection(True)
-        left_layout.addWidget(self.candidate_table, stretch=1)
-        splitter.addWidget(left_panel)
-
-        right_panel = QtWidgets.QWidget()
-        right_layout = QtWidgets.QVBoxLayout(right_panel)
-        right_layout.addWidget(QtWidgets.QLabel("Best sample-rate hypotheses"))
-        self.rate_table = QtWidgets.QTableWidget(0, 6)
-        self.rate_table.setHorizontalHeaderLabels(["Sample rate [Sa/s]", "Best PRN", "Consistent segs", "Score", "Metric", "Search freq [Hz]"])
-        self.rate_table.horizontalHeader().setStretchLastSection(True)
-        right_layout.addWidget(self.rate_table, stretch=1)
-
-        right_layout.addWidget(QtWidgets.QLabel("Best IF / search-center hypotheses"))
-        self.center_table = QtWidgets.QTableWidget(0, 5)
-        self.center_table.setHorizontalHeaderLabels(["Center [Hz]", "Best PRN", "Metric", "Search freq [Hz]", "Rel. Doppler [Hz]"])
-        self.center_table.horizontalHeader().setStretchLastSection(True)
-        right_layout.addWidget(self.center_table, stretch=1)
-
-        right_layout.addWidget(QtWidgets.QLabel("Detected / inspected satellites"))
-        self.satellite_hint_label = QtWidgets.QLabel(
-            "Click a PRN row to inspect that satellite candidate. Then use Track Highlighted PRN to follow its code and carrier over time."
-        )
-        self.satellite_hint_label.setWordWrap(True)
-        right_layout.addWidget(self.satellite_hint_label)
-        self.satellite_table = QtWidgets.QTableWidget(0, 9)
-        self.satellite_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.satellite_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.satellite_table.setHorizontalHeaderLabels(
-            [
-                "PRN",
-                "Metric",
-                "Consistent segs",
-                "Search freq [Hz]",
-                "Rel. Doppler [Hz]",
-                "Code phase",
-                "Tracking",
-                "Navigation",
-                "Interpretation",
-            ]
-        )
-        self.satellite_table.horizontalHeader().setStretchLastSection(True)
-        right_layout.addWidget(self.satellite_table, stretch=1)
-
-        right_layout.addWidget(QtWidgets.QLabel("Acquisition evidence"))
-        self.evidence_text = QtWidgets.QPlainTextEdit()
-        self.evidence_text.setReadOnly(True)
-        right_layout.addWidget(self.evidence_text, stretch=1)
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-
-        layout.addWidget(splitter, stretch=1)
+        root_splitter.addWidget(workspace)
+        root_splitter.setStretchFactor(0, 0)
+        root_splitter.setStretchFactor(1, 1)
+        root_splitter.setSizes([340, 1060])
 
         self.run_button.clicked.connect(self.run_requested.emit)
         self.scan_button.clicked.connect(self.scan_requested.emit)
@@ -266,6 +324,21 @@ class AcquisitionTab(QtWidgets.QWidget):
         self.satellite_table.cellDoubleClicked.connect(lambda *_: self.track_selected_requested.emit())
         self.center_table.itemSelectionChanged.connect(self._emit_sweep_selection_changed)
         self.rate_table.itemSelectionChanged.connect(self._emit_sample_rate_selection_changed)
+
+    @staticmethod
+    def _configure_table(table: QtWidgets.QTableWidget, minimum_height: int) -> None:
+        """Make dense evidence tables readable and horizontally scrollable."""
+
+        table.setMinimumHeight(minimum_height)
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        table.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setHighlightSections(False)
+        table.horizontalHeader().setMinimumSectionSize(70)
 
     @staticmethod
     def parse_prn_list(text: str) -> list[int]:
@@ -583,29 +656,27 @@ class AcquisitionTab(QtWidgets.QWidget):
         results = total_results or [result]
         if len(results) > 1:
             self.selected_prn_label.setText(
-                f"Selected PRN {result.prn}: the yellow row/marker belongs to this satellite candidate. "
-                "The overview heatmap compares one row per scanned PRN; local peaks, tracking start values, and evidence below still belong to the selected PRN."
+                f"Selected PRN {result.prn}: yellow marks this candidate; green marks other plausible repeated candidates."
             )
         else:
             self.selected_prn_label.setText(
-                f"Selected PRN {result.prn}: the heatmap, local peaks, tracking start values, and evidence below all belong to this satellite candidate."
+                f"Selected PRN {result.prn}: heatmap, peaks, slices, and evidence all belong to this candidate."
             )
         overview_note = (
-            f" Overview heatmap compares {len(results)} scanned PRN rows by their strongest code-phase peak per Doppler bin."
+            f" Overview heatmap compares {len(results)} scanned PRN rows."
             if len(results) > 1
             else ""
         )
         self.summary_label.setText(
             f"Best peak: PRN {result.best_candidate.prn}, "
-            f"search frequency {result.best_candidate.carrier_frequency_hz:.1f} Hz, "
-            f"relative Doppler {result.best_candidate.doppler_hz:+.1f} Hz, "
-            f"code phase {result.best_candidate.code_phase_samples} samples, "
-            f"segment start {result.best_candidate.segment_start_sample / max(result.sample_rate_hz, 1.0):.3f} s, "
+            f"freq {result.best_candidate.carrier_frequency_hz:.1f} Hz, "
+            f"Doppler {result.best_candidate.doppler_hz:+.1f} Hz, "
+            f"code {result.best_candidate.code_phase_samples}, "
             f"metric {result.best_candidate.metric:.2f}, "
             f"consistent segments {result.consistent_segments}, "
             f"interpretation {acquisition_interpretation(result)}."
             f"{overview_note} "
-            "A strong, repeated peak across segments is only an acquisition candidate; tracking and navigation evidence are needed before treating it as a satellite."
+            "Confirm with tracking and navigation before treating it as a satellite."
         )
         if len(results) > 1:
             self._update_prn_doppler_overview(result, results)
@@ -619,6 +690,8 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.candidate_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{candidate.doppler_hz:+.1f}"))
             self.candidate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(candidate.code_phase_samples)))
             self.candidate_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
+        self.candidate_table.resizeColumnsToContents()
+        self.candidate_table.horizontalHeader().setStretchLastSection(True)
 
         self.satellite_table.blockSignals(True)
         self.satellite_table.setRowCount(len(results))
@@ -682,6 +755,10 @@ class AcquisitionTab(QtWidgets.QWidget):
         if results:
             self.satellite_table.selectRow(next((i for i, item in enumerate(results) if item.prn == result.prn), 0))
         self.satellite_table.blockSignals(False)
+        self.satellite_table.resizeColumnsToContents()
+        self.satellite_table.horizontalHeader().setStretchLastSection(True)
+        if len(results) > 1:
+            self.detail_tabs.setCurrentWidget(self.satellite_page)
 
     def update_sweep_results(self, sweep_entries) -> None:
         """Show ranked IF / search-center hypotheses."""
@@ -694,8 +771,11 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.center_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{best.metric:.2f}"))
             self.center_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{best.carrier_frequency_hz:.1f}"))
             self.center_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{best.doppler_hz:+.1f}"))
+        self.center_table.resizeColumnsToContents()
+        self.center_table.horizontalHeader().setStretchLastSection(True)
         if sweep_entries:
             self.center_table.selectRow(0)
+            self.detail_tabs.setCurrentWidget(self.survey_page)
 
     def update_sample_rate_survey(self, survey_entries) -> None:
         """Show ranked sample-rate hypotheses."""
@@ -709,8 +789,11 @@ class AcquisitionTab(QtWidgets.QWidget):
             self.rate_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{entry.best_result.consistency_score:.2f}"))
             self.rate_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{best.metric:.2f}"))
             self.rate_table.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{best.carrier_frequency_hz:.1f}"))
+        self.rate_table.resizeColumnsToContents()
+        self.rate_table.horizontalHeader().setStretchLastSection(True)
         if survey_entries:
             self.rate_table.selectRow(0)
+            self.detail_tabs.setCurrentWidget(self.survey_page)
 
     def build_search_centers(self) -> list[float]:
         """Return the configured sweep centers."""

@@ -71,6 +71,9 @@ def test_main_window_smoke() -> None:
     assert window.acquisition_tab.center_sweep_button.text() == "Sweep Search Center"
     assert window.acquisition_tab.auto_detect_button.text() == "Auto Detect Capture"
     assert window.acquisition_tab.scan_button.text() == "Scan PRN List"
+    assert window.acquisition_tab.detail_tabs.count() == 6
+    assert window.acquisition_tab.detail_tabs.tabText(0) == "Satellites"
+    assert window.acquisition_tab.heatmap_plot.minimumHeight() >= 360
     assert window.navigation_tab.bit_source_mode() == "auto"
     assert window.acquisition_tab.task_status_label.text() == "Acquisition idle."
     assert window.tracking_tab.task_status_label.text() == "Tracking idle."
