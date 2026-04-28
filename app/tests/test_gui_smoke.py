@@ -13,22 +13,34 @@ from app.models import (
     AcquisitionCandidate,
     AcquisitionResult,
     FileMetadata,
+    SampleRateSurveyEntry,
+    SampleRateSurveyResult,
+    SearchCenterSweepEntry,
+    SearchCenterSweepResult,
     TrackingState,
 )
 
 
-def _make_acquisition_result(prn: int, metric: float = 9.0) -> AcquisitionResult:
+def _make_acquisition_result(
+    prn: int,
+    metric: float = 9.0,
+    *,
+    sample_rate_hz: float = 1_000_000.0,
+    search_center_hz: float = 0.0,
+    doppler_hz: float | None = None,
+) -> AcquisitionResult:
+    doppler = 500.0 * prn if doppler_hz is None else float(doppler_hz)
     candidate = AcquisitionCandidate(
         prn=prn,
-        doppler_hz=500.0 * prn,
-        carrier_frequency_hz=500.0 * prn,
+        doppler_hz=doppler,
+        carrier_frequency_hz=search_center_hz + doppler,
         code_phase_samples=100 * prn,
         metric=metric,
     )
     return AcquisitionResult(
         prn=prn,
-        sample_rate_hz=1_000_000.0,
-        search_center_hz=0.0,
+        sample_rate_hz=sample_rate_hz,
+        search_center_hz=search_center_hz,
         doppler_bins_hz=np.asarray([-500.0, 0.0, 500.0], dtype=np.float32),
         code_phases_samples=np.asarray([0, 1, 2], dtype=np.int32),
         heatmap=np.ones((3, 3), dtype=np.float32) * metric,
@@ -307,6 +319,71 @@ def test_tracking_requires_acquisition_for_selected_prn(monkeypatch: pytest.Monk
 
     assert warnings
     assert window.tracking_tab.task_status_label.text() == "Run acquisition for PRN 8 before tracking."
+
+
+def test_tracking_rejects_stale_acquisition_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    warnings = []
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *args, **_kwargs: warnings.append(args))
+    result = _make_acquisition_result(3, sample_rate_hz=float(window.session_tab.sample_rate_spin.value()))
+    window.acquisition_result = result
+    window.acquisition_results_by_prn[3] = result
+    window._remember_acquisition_contexts([result])
+    window.selected_prn = 3
+
+    window.session_tab.sample_rate_spin.setValue(window.session_tab.sample_rate_spin.value() + 10_000.0)
+    window.start_tracking()
+
+    assert warnings
+    assert "Run acquisition again for PRN 3" in window.tracking_tab.task_status_label.text()
+
+
+def test_search_center_selection_swaps_to_matching_sweep_result() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    window.session_tab.set_file_path("")
+    first = _make_acquisition_result(3, search_center_hz=0.0, doppler_hz=500.0)
+    second = _make_acquisition_result(8, search_center_hz=1_000.0, doppler_hz=-250.0)
+    window.search_center_sweep_result = SearchCenterSweepResult(
+        [
+            SearchCenterSweepEntry(search_center_hz=0.0, best_result=first),
+            SearchCenterSweepEntry(search_center_hz=1_000.0, best_result=second),
+        ]
+    )
+    window.acquisition_results_by_prn = {3: first}
+    window.acquisition_result = first
+
+    window.apply_search_center_selection(1_000.0, 8)
+
+    assert not window.session.is_baseband
+    assert window.session.if_frequency_hz == 1_000.0
+    assert window.acquisition_result is second
+    assert window.acquisition_results_by_prn == {8: second}
+    assert window.selected_prn == 8
+
+
+def test_sample_rate_selection_swaps_to_matching_survey_results() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    window.session_tab.set_file_path("")
+    first = _make_acquisition_result(3, sample_rate_hz=1_000_000.0, doppler_hz=500.0)
+    second = _make_acquisition_result(8, sample_rate_hz=2_000_000.0, doppler_hz=-250.0)
+    window.sample_rate_survey_result = SampleRateSurveyResult(
+        [
+            SampleRateSurveyEntry(sample_rate_hz=1_000_000.0, best_result=first, all_results=[first]),
+            SampleRateSurveyEntry(sample_rate_hz=2_000_000.0, best_result=second, all_results=[second]),
+        ]
+    )
+    window.acquisition_results_by_prn = {3: first}
+    window.acquisition_result = first
+
+    window.apply_sample_rate_selection(2_000_000.0, 8)
+
+    assert window.session.sample_rate == 2_000_000.0
+    assert window.acquisition_result is second
+    assert window.acquisition_results_by_prn == {8: second}
+    assert window.selected_prn == 8
 
 
 def test_tracking_loop_controls_sync_into_session() -> None:

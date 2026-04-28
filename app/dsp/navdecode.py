@@ -81,7 +81,7 @@ def check_lnav_word(word_bits: list[int], previous_word: list[int] | None = None
 
     if len(word_bits) != LNAV_WORD_BITS:
         return False
-    previous_word = previous_word or [0] * LNAV_WORD_BITS
+    previous_word = previous_word if previous_word is not None else [0] * LNAV_WORD_BITS
     d29_star = previous_word[28]
     d30_star = previous_word[29]
     data_bits = extract_data_bits(word_bits, previous_word)
@@ -213,6 +213,8 @@ def maybe_correct_word(
 ) -> tuple[list[int], bool, int | None]:
     """Try a single-bit parity repair and accept only an unambiguous result."""
 
+    if len(word_bits) != LNAV_WORD_BITS:
+        return list(word_bits), False, None
     if check_lnav_word(word_bits, previous_word):
         return list(word_bits), False, None
 

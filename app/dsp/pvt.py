@@ -74,6 +74,8 @@ def solve_position_from_pseudoranges(
         raise ValueError("pseudoranges_m must have shape (N,).")
     if sat_positions.shape[0] < 4:
         raise ValueError("At least four satellites are required for a 3D position fix.")
+    if int(max_iterations) <= 0:
+        raise ValueError("max_iterations must be positive for a position fix.")
 
     receiver = np.zeros(3, dtype=np.float64) if initial_ecef_m is None else np.asarray(initial_ecef_m, dtype=np.float64).copy()
     clock_bias_m = 0.0
@@ -94,6 +96,10 @@ def solve_position_from_pseudoranges(
         clock_bias_m += float(update[3])
         if float(np.linalg.norm(update)) < 1e-4:
             break
+
+    final_delta = sat_positions - receiver[np.newaxis, :]
+    final_ranges = np.maximum(np.linalg.norm(final_delta, axis=1), 1e-9)
+    residuals = pseudoranges - (final_ranges + clock_bias_m)
 
     latitude_deg, longitude_deg, altitude_m = ecef_to_lla(receiver)
     return PositionSolution(

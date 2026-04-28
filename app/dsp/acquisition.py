@@ -363,10 +363,16 @@ def acquire_signal(
         raise ValueError("No samples available for acquisition.")
 
     sample_rate = config.sample_rate
-    if sample_rate <= 0:
+    if not np.isfinite(sample_rate) or sample_rate <= 0:
         raise ValueError("Sample rate must be positive for acquisition.")
-    if config.doppler_step <= 0:
+    if not np.isfinite(config.search_center_hz):
+        raise ValueError("Search center must be finite for acquisition.")
+    if not np.isfinite(config.doppler_min) or not np.isfinite(config.doppler_max):
+        raise ValueError("Doppler range must be finite for acquisition.")
+    if not np.isfinite(config.doppler_step) or config.doppler_step <= 0:
         raise ValueError("Doppler step must be positive for acquisition.")
+    if config.doppler_min > config.doppler_max:
+        raise ValueError("Doppler minimum must not exceed Doppler maximum for acquisition.")
 
     samples_per_ms = int(round(sample_rate * 1e-3))
     if samples_per_ms <= 0:
@@ -382,6 +388,8 @@ def acquire_signal(
     local_code = sample_ca_code(config.prn, sample_rate, samples_per_ms)
     code_fft = np.conj(np.fft.fft(local_code))
     doppler_bins = np.arange(config.doppler_min, config.doppler_max + config.doppler_step, config.doppler_step)
+    if doppler_bins.size == 0:
+        raise ValueError("Doppler search produced no bins.")
     time_vector = np.arange(samples_per_ms, dtype=np.float64) / sample_rate
     segment_plan = resolve_compute_plan(
         config.compute_backend,

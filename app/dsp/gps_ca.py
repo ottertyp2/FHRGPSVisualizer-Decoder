@@ -82,6 +82,13 @@ def sample_ca_code(
 ) -> np.ndarray:
     """Sample a local C/A code replica at the requested sample rate."""
 
+    if not np.isfinite(sample_rate) or sample_rate <= 0:
+        raise ValueError("Sample rate must be positive for C/A code sampling.")
+    if int(num_samples) < 0:
+        raise ValueError("Number of C/A code samples must not be negative.")
+    if not np.isfinite(code_rate_hz) or code_rate_hz <= 0:
+        raise ValueError("Code rate must be positive for C/A code sampling.")
+
     base_code = generate_ca_code(prn)
     chip_positions = code_phase_chips + (np.arange(num_samples, dtype=np.float64) * code_rate_hz / sample_rate)
     chip_indices = np.floor(chip_positions).astype(np.int64) % CA_CODE_LENGTH
@@ -91,5 +98,9 @@ def sample_ca_code(
 def code_phase_samples_to_chips(code_phase_samples: int, sample_rate: float) -> float:
     """Convert a code phase expressed in samples to chips."""
 
+    if not np.isfinite(sample_rate) or sample_rate <= 0:
+        raise ValueError("Sample rate must be positive for code-phase conversion.")
     samples_per_ms = int(round(sample_rate * 1e-3))
+    if samples_per_ms <= 0:
+        raise ValueError("Sample rate is too low for code-phase conversion.")
     return float(code_phase_samples) * CA_CODE_LENGTH / float(samples_per_ms)

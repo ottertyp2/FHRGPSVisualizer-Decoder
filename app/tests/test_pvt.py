@@ -28,6 +28,7 @@ def test_position_solver_recovers_wachtberg_like_receiver() -> None:
     assert abs(solution.receiver_clock_bias_m - clock_bias_m) < 1e-3
     assert abs(solution.latitude_deg - 50.616) < 1e-8
     assert abs(solution.longitude_deg - 7.128) < 1e-8
+    np.testing.assert_allclose(solution.residuals_m, np.zeros(satellites.shape[0]), atol=1e-6)
 
 
 def test_position_solver_requires_four_satellites() -> None:
@@ -40,3 +41,15 @@ def test_position_solver_requires_four_satellites() -> None:
         assert "At least four satellites" in str(exc)
     else:
         raise AssertionError("Expected a ValueError for underdetermined PVT.")
+
+
+def test_position_solver_requires_positive_iteration_count() -> None:
+    satellites = np.zeros((4, 3), dtype=np.float64)
+    pseudoranges = np.ones(4, dtype=np.float64)
+
+    try:
+        solve_position_from_pseudoranges(satellites, pseudoranges, max_iterations=0)
+    except ValueError as exc:
+        assert "max_iterations" in str(exc)
+    else:
+        raise AssertionError("Expected a ValueError for max_iterations=0.")

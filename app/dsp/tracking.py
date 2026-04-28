@@ -11,6 +11,12 @@ from app.dsp.io import Complex64FileSource
 from app.models import AcquisitionResult, SessionConfig, TrackingState
 
 
+def _session_search_center_hz(session: SessionConfig) -> float:
+    """Return the active acquisition/tracking search center from the session."""
+
+    return 0.0 if session.is_baseband else float(session.if_frequency_hz)
+
+
 def _sample_index_for_ms(ms_index: int, sample_rate: float) -> int:
     """Return the nearest sample index for an integer millisecond boundary."""
 
@@ -28,6 +34,30 @@ def _track_blocks(
 ) -> TrackingState:
     """Track one PRN using a sequence of 1 ms blocks."""
 
+    if not np.isfinite(session.sample_rate) or session.sample_rate <= 0:
+        raise ValueError("Sample rate must be positive for tracking.")
+    if not np.isclose(
+        float(session.sample_rate),
+        float(acquisition.sample_rate_hz),
+        rtol=1e-9,
+        atol=1e-3,
+    ):
+        raise ValueError(
+            f"Tracking sample-rate mismatch: session {session.sample_rate:.6f} Sa/s "
+            f"does not match acquisition {acquisition.sample_rate_hz:.6f} Sa/s."
+        )
+    search_center_hz = _session_search_center_hz(session)
+    if not np.isclose(
+        search_center_hz,
+        float(acquisition.search_center_hz),
+        rtol=1e-9,
+        atol=1e-3,
+    ):
+        raise ValueError(
+            f"Tracking search-center mismatch: session {search_center_hz:.3f} Hz "
+            f"does not match acquisition {acquisition.search_center_hz:.3f} Hz."
+        )
+
     samples_per_ms = int(round(session.sample_rate * 1e-3))
     if max_ms <= 0:
         raise ValueError("Not enough samples for 1 ms tracking updates.")
@@ -44,7 +74,6 @@ def _track_blocks(
     spacing = float(session.early_late_spacing_chips)
     code_phase_chips = code_phase_samples_to_chips(best.code_phase_samples, session.sample_rate)
     code_freq = CA_CODE_RATE_HZ
-    search_center_hz = 0.0 if session.is_baseband else float(session.if_frequency_hz)
     carrier_freq = float(best.carrier_frequency_hz)
     carrier_phase = 0.0
     prev_prompt = 0.0j
@@ -138,6 +167,9 @@ def _track_blocks(
         valid_count = ms_index + 1
 
     valid = valid_count
+    if valid == 0:
+        raise ValueError("No complete 1 ms blocks were available for tracking.")
+
     times_s = np.arange(valid, dtype=np.float32) * 1e-3
     lock_detected = False
     if valid:

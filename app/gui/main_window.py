@@ -74,6 +74,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bit_result: BitDecisionResult | None = None
         self.nav_result: NavigationDecodeResult | None = None
         self.acquisition_results_by_prn: dict[int, AcquisitionResult] = {}
+        self.acquisition_context_by_prn: dict[int, tuple[str | None, int, int, float, float]] = {}
         self.tracking_results_by_prn: dict[int, TrackingState] = {}
         self.bit_results_by_prn: dict[int, BitDecisionResult] = {}
         self.nav_results_by_prn: dict[int, NavigationDecodeResult] = {}
@@ -117,6 +118,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bit_result = None
         self.nav_result = None
         self.acquisition_results_by_prn.clear()
+        self.acquisition_context_by_prn.clear()
         self.tracking_results_by_prn.clear()
         self.bit_results_by_prn.clear()
         self.nav_results_by_prn.clear()
@@ -325,6 +327,22 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.session_tab.baseband_checkbox.setChecked(False)
             self.session_tab.if_frequency_spin.setValue(center_hz)
+        self.sync_session_from_ui()
+        if self.search_center_sweep_result is not None:
+            selected_entry = next(
+                (
+                    entry
+                    for entry in self.search_center_sweep_result.entries
+                    if np.isclose(entry.search_center_hz, center_hz, rtol=1e-9, atol=1e-3)
+                    and entry.best_result.prn == prn
+                ),
+                None,
+            )
+            if selected_entry is not None:
+                self.acquisition_result = selected_entry.best_result
+                self.acquisition_results_by_prn = {selected_entry.best_result.prn: selected_entry.best_result}
+                self.acquisition_context_by_prn.clear()
+                self._remember_acquisition_contexts([selected_entry.best_result])
         self.set_selected_prn(prn)
         self.append_log(
             f"Applied search-center hypothesis: center {center_hz:.1f} Hz, PRN {prn}."
@@ -337,6 +355,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_session_from_ui()
         if self.session.file_path and self.session.file_path != "<demo>":
             self.inspect_file(self.session.file_path)
+        if self.sample_rate_survey_result is not None:
+            selected_entry = next(
+                (
+                    entry
+                    for entry in self.sample_rate_survey_result.entries
+                    if np.isclose(entry.sample_rate_hz, sample_rate_hz, rtol=1e-9, atol=1.0)
+                ),
+                None,
+            )
+            if selected_entry is not None:
+                selected_results = selected_entry.all_results or [selected_entry.best_result]
+                self.acquisition_results_by_prn = {item.prn: item for item in selected_results}
+                self.acquisition_result = selected_entry.best_result
+                self.acquisition_context_by_prn.clear()
+                self._remember_acquisition_contexts(selected_results)
         self.set_selected_prn(prn)
         self.append_log(
             f"Applied sample-rate hypothesis: {sample_rate_hz / 1e6:.3f} MSa/s, PRN {prn}."
@@ -422,6 +455,64 @@ class MainWindow(QtWidgets.QMainWindow):
             int(self.session.start_sample),
             int(self.session.sample_count),
         )
+
+    def _processing_context_for_result(self, result: AcquisitionResult) -> tuple[str | None, int, int, float, float]:
+        """Return the source and hypothesis context that one acquisition result belongs to."""
+
+        return (
+            self.session.file_path,
+            int(self.session.start_sample),
+            int(self.session.sample_count),
+            float(result.sample_rate_hz),
+            float(result.search_center_hz),
+        )
+
+    def _current_processing_context(self) -> tuple[str | None, int, int, float, float]:
+        """Return the current source and signal-hypothesis context."""
+
+        search_center_hz = 0.0 if self.session.is_baseband else float(self.session.if_frequency_hz)
+        return (
+            self.session.file_path,
+            int(self.session.start_sample),
+            int(self.session.sample_count),
+            float(self.session.sample_rate),
+            search_center_hz,
+        )
+
+    @staticmethod
+    def _processing_context_matches(
+        stored: tuple[str | None, int, int, float, float],
+        current: tuple[str | None, int, int, float, float],
+    ) -> bool:
+        """Return whether an acquisition context still matches the active session."""
+
+        return (
+            stored[0] == current[0]
+            and stored[1] == current[1]
+            and stored[2] == current[2]
+            and np.isclose(stored[3], current[3], rtol=1e-9, atol=1.0)
+            and np.isclose(stored[4], current[4], rtol=1e-9, atol=1e-3)
+        )
+
+    def _remember_acquisition_contexts(self, results: list[AcquisitionResult]) -> None:
+        """Record the source/hypothesis context for newly produced acquisition results."""
+
+        for result in results:
+            self.acquisition_context_by_prn[result.prn] = self._processing_context_for_result(result)
+
+    def _acquisition_context_issue(self, acquisition: AcquisitionResult) -> str | None:
+        """Return a user-facing reason when an acquisition no longer matches the session."""
+
+        current = self._current_processing_context()
+        stored = self.acquisition_context_by_prn.get(acquisition.prn)
+        if stored is not None and not self._processing_context_matches(stored, current):
+            return "the selected source window, sample rate, or IF/search-center changed after acquisition"
+        if stored is None:
+            if not np.isclose(acquisition.sample_rate_hz, current[3], rtol=1e-9, atol=1.0):
+                return "the sample rate changed after acquisition"
+            if not np.isclose(acquisition.search_center_hz, current[4], rtol=1e-9, atol=1e-3):
+                return "the IF/search-center changed after acquisition"
+        return None
 
     def current_window_samples(self) -> np.ndarray:
         """Return the selected analysis window from the in-memory source buffer."""
@@ -739,6 +830,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_acquisition_finished(self, result: AcquisitionResult) -> None:
         self.acquisition_result = result
         self.acquisition_results_by_prn[result.prn] = result
+        self._remember_acquisition_contexts([result])
         self.selected_prn = result.prn
         self.refresh_satellite_views()
         if self.current_display_samples.size:
@@ -780,6 +872,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_acquisition_scan_finished(self, results: list[AcquisitionResult]) -> None:
         self.acquisition_results_by_prn.update({item.prn: item for item in results})
+        self._remember_acquisition_contexts(results)
         if results:
             self.acquisition_result = results[0]
             self.selected_prn = results[0].prn
@@ -834,6 +927,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.apply_search_center_selection(best_entry.search_center_hz, best_entry.best_result.prn)
             self.acquisition_result = best_entry.best_result
             self.acquisition_results_by_prn[best_entry.best_result.prn] = best_entry.best_result
+            self._remember_acquisition_contexts([best_entry.best_result])
             self.refresh_satellite_views()
             if acquisition_metric_is_strong(best_entry.best_result.best_candidate.metric):
                 self.append_log(
@@ -868,8 +962,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sync_session_from_ui()
             if self.session.file_path and self.session.file_path != "<demo>":
                 self.inspect_file(self.session.file_path)
-            self.acquisition_results_by_prn = {item.prn: item for item in best_entry.all_results}
+            selected_results = best_entry.all_results or [best_entry.best_result]
+            self.acquisition_results_by_prn = {item.prn: item for item in selected_results}
             self.acquisition_result = best_entry.best_result
+            self.acquisition_context_by_prn.clear()
+            self._remember_acquisition_contexts(selected_results)
             self.selected_prn = best_entry.best_result.prn
             self.refresh_satellite_views()
             if self.current_display_samples.size:
@@ -917,6 +1014,13 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Tracking", f"Run acquisition for PRN {selected_prn} before tracking.")
             return
         self.sync_session_from_ui()
+        context_issue = self._acquisition_context_issue(acquisition)
+        if context_issue is not None:
+            message = f"Run acquisition again for PRN {selected_prn}; {context_issue}."
+            self.tracking_tab.set_task_message(message)
+            self.tracking_tab.set_task_progress(0)
+            QtWidgets.QMessageBox.warning(self, "Tracking", message)
+            return
         self.session.prn = selected_prn
         self.tracking_tab.set_task_message(f"Tracking PRN {selected_prn}.")
         self.tracking_tab.set_task_progress(0)

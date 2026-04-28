@@ -86,3 +86,10 @@ def test_generate_ca_code_is_cached() -> None:
 def test_sample_ca_code_size() -> None:
     sampled = sample_ca_code(3, 4_092_000.0, 4_092)
     assert sampled.shape == (4_092,)
+
+
+def test_sample_ca_code_rejects_invalid_sampling_parameters() -> None:
+    with pytest.raises(ValueError, match="Sample rate"):
+        sample_ca_code(1, 0.0, 10)
+    with pytest.raises(ValueError, match="Number"):
+        sample_ca_code(1, 1_000_000.0, -1)

@@ -15,6 +15,7 @@ from app.dsp.navdecode import (
     compute_lnav_parity,
     decode_navigation_bits,
     decode_navigation_from_tracking,
+    maybe_correct_word,
     parse_how,
 )
 from app.dsp.tracking import track_signal
@@ -123,6 +124,14 @@ def test_two_low_confidence_errors_are_not_corrected() -> None:
     assert failed_word.corrected_bit_index is None
 
 
+def test_maybe_correct_word_rejects_incomplete_words() -> None:
+    corrected, was_corrected, corrected_index = maybe_correct_word([1, 0, 1])
+
+    assert corrected == [1, 0, 1]
+    assert not was_corrected
+    assert corrected_index is None
+
+
 def test_preamble_and_ten_words_group_into_navigation_subframe() -> None:
     words = _make_synthetic_subframe(subframe_id=1)
     bit_values = _flatten_words(words).astype(int).tolist()
@@ -220,6 +229,59 @@ def test_tracking_rejects_prn_mismatch_inside_acquisition_result() -> None:
     samples = np.zeros(1_000, dtype=np.complex64)
 
     with pytest.raises(ValueError, match="Acquisition PRN mismatch"):
+        track_signal(samples, session, acquisition)
+
+
+def test_tracking_rejects_sample_rate_mismatch() -> None:
+    acquisition = AcquisitionResult(
+        prn=3,
+        sample_rate_hz=1_000_000.0,
+        search_center_hz=0.0,
+        doppler_bins_hz=np.asarray([0.0], dtype=np.float32),
+        code_phases_samples=np.asarray([0], dtype=np.int32),
+        heatmap=np.ones((1, 1), dtype=np.float32),
+        best_candidate=AcquisitionCandidate(
+            prn=3,
+            doppler_hz=0.0,
+            carrier_frequency_hz=0.0,
+            code_phase_samples=0,
+            metric=9.0,
+        ),
+    )
+    session = SessionConfig(sample_rate=1_001_000.0, sample_count=1_001, tracking_ms=1, prn=3)
+    samples = np.zeros(1_001, dtype=np.complex64)
+
+    with pytest.raises(ValueError, match="sample-rate mismatch"):
+        track_signal(samples, session, acquisition)
+
+
+def test_tracking_rejects_search_center_mismatch() -> None:
+    acquisition = AcquisitionResult(
+        prn=3,
+        sample_rate_hz=1_000_000.0,
+        search_center_hz=0.0,
+        doppler_bins_hz=np.asarray([0.0], dtype=np.float32),
+        code_phases_samples=np.asarray([0], dtype=np.int32),
+        heatmap=np.ones((1, 1), dtype=np.float32),
+        best_candidate=AcquisitionCandidate(
+            prn=3,
+            doppler_hz=0.0,
+            carrier_frequency_hz=0.0,
+            code_phase_samples=0,
+            metric=9.0,
+        ),
+    )
+    session = SessionConfig(
+        sample_rate=1_000_000.0,
+        sample_count=1_000,
+        tracking_ms=1,
+        prn=3,
+        is_baseband=False,
+        if_frequency_hz=1_000.0,
+    )
+    samples = np.zeros(1_000, dtype=np.complex64)
+
+    with pytest.raises(ValueError, match="search-center mismatch"):
         track_signal(samples, session, acquisition)
 
 
