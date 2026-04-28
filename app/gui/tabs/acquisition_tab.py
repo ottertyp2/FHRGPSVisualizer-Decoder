@@ -38,6 +38,7 @@ class AcquisitionTab(QtWidgets.QWidget):
         sidebar_scroll = QtWidgets.QScrollArea()
         sidebar_scroll.setWidgetResizable(True)
         sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         sidebar_scroll.setMinimumWidth(300)
         sidebar_scroll.setMaximumWidth(430)
         sidebar = QtWidgets.QWidget()

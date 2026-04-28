@@ -20,28 +20,48 @@ class TrackingTab(QtWidgets.QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QtWidgets.QVBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        root_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        root_splitter.setChildrenCollapsible(False)
+        layout.addWidget(root_splitter)
+
+        sidebar_scroll = QtWidgets.QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        sidebar_scroll.setMinimumWidth(300)
+        sidebar_scroll.setMaximumWidth(430)
+        sidebar = QtWidgets.QWidget()
+        sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 8, 0)
+        sidebar_layout.setSpacing(8)
+        sidebar_scroll.setWidget(sidebar)
+
         help_label = QtWidgets.QLabel(
             f"{TOOLTIPS['early_late']} {TOOLTIPS['nav_bits']}"
         )
         help_label.setWordWrap(True)
-        layout.addWidget(help_label)
+        sidebar_layout.addWidget(help_label)
 
-        control_row = QtWidgets.QHBoxLayout()
+        channel_group = QtWidgets.QGroupBox("Channel")
+        channel_layout = QtWidgets.QVBoxLayout(channel_group)
         self.prn_combo = QtWidgets.QComboBox()
         self.prn_combo.addItem("No PRN")
         self.track_button = QtWidgets.QPushButton("Start Tracking For Selected PRN")
         self.decode_button = QtWidgets.QPushButton("Decode Selected PRN")
-        control_row.addWidget(QtWidgets.QLabel("Satellite / PRN"))
-        control_row.addWidget(self.prn_combo)
-        control_row.addWidget(self.track_button)
-        control_row.addWidget(self.decode_button)
-        control_row.addStretch()
-        layout.addLayout(control_row)
+        channel_layout.addWidget(QtWidgets.QLabel("Satellite / PRN"))
+        channel_layout.addWidget(self.prn_combo)
+        channel_layout.addWidget(self.track_button)
+        channel_layout.addWidget(self.decode_button)
+        sidebar_layout.addWidget(channel_group)
 
         defaults = SessionConfig()
         loop_group = QtWidgets.QGroupBox("Tracking loop controls")
         loop_layout = QtWidgets.QFormLayout(loop_group)
+        loop_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
         self.early_late_spin = QtWidgets.QDoubleSpinBox()
         self.early_late_spin.setRange(0.05, 1.5)
         self.early_late_spin.setDecimals(2)
@@ -73,20 +93,118 @@ class TrackingTab(QtWidgets.QWidget):
         loop_layout.addRow("PLL gain", self.pll_gain_spin)
         loop_layout.addRow("FLL gain", self.fll_gain_spin)
         loop_layout.addRow(self.reset_loop_button)
-        layout.addWidget(loop_group)
+        sidebar_layout.addWidget(loop_group)
 
         self.status_label = QtWidgets.QLabel("Tracking not started.")
+        self.status_label.setWordWrap(True)
         self.task_status_label = QtWidgets.QLabel("Tracking idle.")
         self.task_status_label.setWordWrap(True)
-        layout.addWidget(self.task_status_label)
+        self.task_progress_bar = QtWidgets.QProgressBar()
+        self.task_progress_bar.setRange(0, 100)
+        self.task_progress_bar.setValue(0)
+        status_group = QtWidgets.QGroupBox("Status")
+        status_layout = QtWidgets.QVBoxLayout(status_group)
+        status_layout.addWidget(self.task_status_label)
+        status_layout.addWidget(self.task_progress_bar)
+        status_layout.addWidget(self.status_label)
+        sidebar_layout.addWidget(status_group)
+
+        guide_group = QtWidgets.QGroupBox("Quick guide")
+        guide_layout = QtWidgets.QVBoxLayout(guide_group)
         self.stage_hint_label = QtWidgets.QLabel(
             "Tracking starts from the selected acquisition peak and then updates Doppler and code phase every millisecond."
         )
         self.stage_hint_label.setWordWrap(True)
-        layout.addWidget(self.stage_hint_label)
+        guide_layout.addWidget(self.stage_hint_label)
+        sidebar_layout.addWidget(guide_group)
+        sidebar_layout.addStretch()
+        root_splitter.addWidget(sidebar_scroll)
 
-        what_group = QtWidgets.QGroupBox("What am I seeing?")
-        what_layout = QtWidgets.QVBoxLayout(what_group)
+        workspace = QtWidgets.QWidget()
+        workspace_layout = QtWidgets.QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(8)
+
+        self.tracking_tabs = QtWidgets.QTabWidget()
+        self.tracking_tabs.setDocumentMode(True)
+        workspace_layout.addWidget(self.tracking_tabs, stretch=1)
+
+        self.stage_iq_scatters: dict[str, pg.ScatterPlotItem] = {}
+        iq_page = QtWidgets.QWidget()
+        iq_layout = QtWidgets.QGridLayout(iq_page)
+        iq_layout.setSpacing(8)
+        stage_explanations = {
+            "Raw IQ": "Raw IQ is the sum of all received signals plus front-end effects and noise.",
+            "Carrier wiped": "Carrier wiped IQ has the selected Doppler hypothesis removed.",
+            "Despread": "Despreading multiplies by the selected local PRN.",
+            "Integrated prompt": "One complex value per 1 ms after carrier wipeoff and PRN despreading.",
+        }
+        for index, (name, explanation) in enumerate(stage_explanations.items()):
+            panel = QtWidgets.QWidget()
+            panel_layout = QtWidgets.QVBoxLayout(panel)
+            panel_layout.setContentsMargins(0, 0, 0, 0)
+            plot = pg.PlotWidget(title=name)
+            plot.setMinimumHeight(250)
+            plot.setToolTip(explanation)
+            plot.setLabel("bottom", "I")
+            plot.setLabel("left", "Q")
+            plot.showGrid(x=True, y=True, alpha=0.2)
+            scatter = pg.ScatterPlotItem(size=4, pen=pg.mkPen(None), brush=pg.mkBrush(80, 190, 255, 150))
+            plot.addItem(scatter)
+            text = QtWidgets.QLabel(explanation)
+            text.setWordWrap(True)
+            text.setMaximumHeight(46)
+            self.stage_iq_scatters[name] = scatter
+            panel_layout.addWidget(plot, stretch=1)
+            panel_layout.addWidget(text)
+            iq_layout.addWidget(panel, index // 2, index % 2)
+        self.tracking_tabs.addTab(iq_page, "IQ Stages")
+
+        loop_page = QtWidgets.QWidget()
+        loop_layout_grid = QtWidgets.QGridLayout(loop_page)
+        loop_layout_grid.setSpacing(8)
+
+        self.prompt_plot = pg.PlotWidget(title="Prompt I/Q")
+        self.prompt_plot.setMinimumHeight(210)
+        self.prompt_plot.setToolTip("Prompt I/Q is one complex value per 1 ms after carrier wipeoff and PRN despreading.")
+        self.prompt_i_curve = self.prompt_plot.plot(pen="c", name="I")
+        self.prompt_q_curve = self.prompt_plot.plot(pen="m", name="Q")
+
+        self.mag_plot = pg.PlotWidget(title="Early / Prompt / Late magnitude")
+        self.mag_plot.setMinimumHeight(210)
+        self.mag_plot.setToolTip("Prompt should usually sit above Early/Late when the code phase is aligned.")
+        self.early_curve = self.mag_plot.plot(pen="r")
+        self.prompt_mag_curve = self.mag_plot.plot(pen="y")
+        self.late_curve = self.mag_plot.plot(pen="g")
+
+        self.error_plot = pg.PlotWidget(title="Code and carrier error")
+        self.error_plot.setMinimumHeight(210)
+        self.error_plot.setToolTip("Code error steers PRN timing; carrier error steers residual Doppler/phase.")
+        self.code_error_curve = self.error_plot.plot(pen="w")
+        self.carrier_error_curve = self.error_plot.plot(pen="c")
+
+        self.freq_plot = pg.PlotWidget(title="Estimated Doppler and code frequency")
+        self.freq_plot.setMinimumHeight(210)
+        self.doppler_curve = self.freq_plot.plot(pen="y")
+        self.code_freq_curve = self.freq_plot.plot(pen="m")
+
+        self.lock_plot = pg.PlotWidget(title="Lock metric")
+        self.lock_plot.setMinimumHeight(180)
+        self.lock_curve = self.lock_plot.plot(pen="g")
+
+        loop_layout_grid.addWidget(self.prompt_plot, 0, 0)
+        loop_layout_grid.addWidget(self.mag_plot, 0, 1)
+        loop_layout_grid.addWidget(self.error_plot, 1, 0)
+        loop_layout_grid.addWidget(self.freq_plot, 1, 1)
+        loop_layout_grid.addWidget(self.lock_plot, 2, 0, 1, 2)
+        self.tracking_tabs.addTab(loop_page, "Loop Trends")
+
+        self.evidence_text = QtWidgets.QPlainTextEdit()
+        self.evidence_text.setReadOnly(True)
+        self.tracking_tabs.addTab(self.evidence_text, "Evidence")
+
+        guide_page = QtWidgets.QWidget()
+        what_layout = QtWidgets.QVBoxLayout(guide_page)
         what_label = QtWidgets.QLabel(
             "Tracking takes the acquisition peak as a starting point. "
             "It updates carrier frequency and code phase every millisecond so the selected PRN stays aligned. "
@@ -100,74 +218,13 @@ class TrackingTab(QtWidgets.QWidget):
         )
         carrier_label.setWordWrap(True)
         what_layout.addWidget(carrier_label)
-        layout.addWidget(what_group)
+        what_layout.addStretch()
+        self.tracking_tabs.addTab(guide_page, "Guide")
 
-        self.task_progress_bar = QtWidgets.QProgressBar()
-        self.task_progress_bar.setRange(0, 100)
-        self.task_progress_bar.setValue(0)
-        layout.addWidget(self.task_progress_bar)
-
-        layout.addWidget(self.status_label)
-
-        self.evidence_text = QtWidgets.QPlainTextEdit()
-        self.evidence_text.setReadOnly(True)
-        self.evidence_text.setMaximumHeight(140)
-        layout.addWidget(self.evidence_text)
-
-        self.stage_iq_scatters: dict[str, pg.ScatterPlotItem] = {}
-        stage_group = QtWidgets.QGroupBox("Signal stage IQ views")
-        stage_layout = QtWidgets.QGridLayout(stage_group)
-        stage_explanations = {
-            "Raw IQ": "Raw IQ is the sum of all received signals plus front-end effects and noise. It usually looks like a cloud, not clean bits.",
-            "Carrier wiped": "Carrier wiped IQ has the selected Doppler hypothesis removed. Rotation can stop while the remaining phase is still not 0 degrees.",
-            "Despread": "Despreading multiplies by the selected local PRN. The desired PRN adds coherently; other PRNs mostly do not.",
-            "Integrated prompt": "Integrated prompt is one complex value per 1 ms after carrier wipeoff and PRN despreading. This is where a tracked BPSK channel should most clearly form a line or clusters.",
-        }
-        for index, (name, explanation) in enumerate(stage_explanations.items()):
-            plot = pg.PlotWidget(title=name)
-            plot.setMinimumHeight(130)
-            plot.setLabel("bottom", "I")
-            plot.setLabel("left", "Q")
-            plot.showGrid(x=True, y=True, alpha=0.2)
-            scatter = pg.ScatterPlotItem(size=4, pen=pg.mkPen(None), brush=pg.mkBrush(80, 190, 255, 150))
-            plot.addItem(scatter)
-            text = QtWidgets.QLabel(explanation)
-            text.setWordWrap(True)
-            text.setMinimumWidth(240)
-            self.stage_iq_scatters[name] = scatter
-            row = index // 2
-            column = (index % 2) * 2
-            stage_layout.addWidget(plot, row, column)
-            stage_layout.addWidget(text, row, column + 1)
-        layout.addWidget(stage_group, stretch=1)
-
-        self.prompt_plot = pg.PlotWidget(title="Prompt I/Q")
-        self.prompt_plot.setToolTip("Prompt I/Q is one complex value per 1 ms after carrier wipeoff and PRN despreading.")
-        self.prompt_i_curve = self.prompt_plot.plot(pen="c", name="I")
-        self.prompt_q_curve = self.prompt_plot.plot(pen="m", name="Q")
-        layout.addWidget(self.prompt_plot, stretch=1)
-
-        self.mag_plot = pg.PlotWidget(title="Early / Prompt / Late magnitude")
-        self.mag_plot.setToolTip("Prompt should usually sit above Early/Late when the code phase is aligned.")
-        self.early_curve = self.mag_plot.plot(pen="r")
-        self.prompt_mag_curve = self.mag_plot.plot(pen="y")
-        self.late_curve = self.mag_plot.plot(pen="g")
-        layout.addWidget(self.mag_plot, stretch=1)
-
-        self.error_plot = pg.PlotWidget(title="Code and carrier error")
-        self.error_plot.setToolTip("Code error steers PRN timing; carrier error steers residual Doppler/phase.")
-        self.code_error_curve = self.error_plot.plot(pen="w")
-        self.carrier_error_curve = self.error_plot.plot(pen="c")
-        layout.addWidget(self.error_plot, stretch=1)
-
-        self.freq_plot = pg.PlotWidget(title="Estimated Doppler and code frequency")
-        self.doppler_curve = self.freq_plot.plot(pen="y")
-        self.code_freq_curve = self.freq_plot.plot(pen="m")
-        layout.addWidget(self.freq_plot, stretch=1)
-
-        self.lock_plot = pg.PlotWidget(title="Lock metric")
-        self.lock_curve = self.lock_plot.plot(pen="g")
-        layout.addWidget(self.lock_plot, stretch=1)
+        root_splitter.addWidget(workspace)
+        root_splitter.setStretchFactor(0, 0)
+        root_splitter.setStretchFactor(1, 1)
+        root_splitter.setSizes([340, 1060])
 
         self.track_button.clicked.connect(self.track_requested.emit)
         self.decode_button.clicked.connect(self.decode_requested.emit)

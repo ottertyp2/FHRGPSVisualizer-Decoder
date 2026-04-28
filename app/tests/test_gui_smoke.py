@@ -74,6 +74,11 @@ def test_main_window_smoke() -> None:
     assert window.acquisition_tab.detail_tabs.count() == 6
     assert window.acquisition_tab.detail_tabs.tabText(0) == "Satellites"
     assert window.acquisition_tab.heatmap_plot.minimumHeight() >= 360
+    assert window.tracking_tab.tracking_tabs.count() == 4
+    assert window.tracking_tab.tracking_tabs.tabText(0) == "IQ Stages"
+    assert window.navigation_tab.navigation_tabs.count() == 4
+    assert window.navigation_tab.navigation_tabs.tabText(1) == "LNAV Words"
+    assert window.raw_tab.i_plot.minimumHeight() >= 260
     assert window.navigation_tab.bit_source_mode() == "auto"
     assert window.acquisition_tab.task_status_label.text() == "Acquisition idle."
     assert window.tracking_tab.task_status_label.text() == "Tracking idle."

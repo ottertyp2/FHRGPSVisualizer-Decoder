@@ -21,6 +21,8 @@ class RawSignalTab(QtWidgets.QWidget):
         help_label.setWordWrap(True)
         layout.addWidget(help_label)
 
+        plot_grid = QtWidgets.QGridLayout()
+        plot_grid.setSpacing(8)
         self.i_plot = pg.PlotWidget(title="I(t)")
         self.q_plot = pg.PlotWidget(title="Q(t)")
         self.mag_plot = pg.PlotWidget(title="Magnitude")
@@ -31,7 +33,13 @@ class RawSignalTab(QtWidgets.QWidget):
         self.phase_curve = self.phase_plot.plot(pen="w")
 
         for widget in (self.i_plot, self.q_plot, self.mag_plot, self.phase_plot):
-            layout.addWidget(widget, stretch=1)
+            widget.setMinimumHeight(260)
+            widget.showGrid(x=True, y=True, alpha=0.2)
+        plot_grid.addWidget(self.i_plot, 0, 0)
+        plot_grid.addWidget(self.q_plot, 0, 1)
+        plot_grid.addWidget(self.mag_plot, 1, 0)
+        plot_grid.addWidget(self.phase_plot, 1, 1)
+        layout.addLayout(plot_grid, stretch=1)
 
         self.decimation_label = QtWidgets.QLabel("")
         layout.addWidget(self.decimation_label)

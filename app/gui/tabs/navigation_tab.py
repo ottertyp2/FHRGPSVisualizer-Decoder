@@ -18,14 +18,34 @@ class NavigationTab(QtWidgets.QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QtWidgets.QVBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        root_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        root_splitter.setChildrenCollapsible(False)
+        layout.addWidget(root_splitter)
+
+        sidebar_scroll = QtWidgets.QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        sidebar_scroll.setMinimumWidth(300)
+        sidebar_scroll.setMaximumWidth(430)
+        sidebar = QtWidgets.QWidget()
+        sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 8, 0)
+        sidebar_layout.setSpacing(8)
+        sidebar_scroll.setWidget(sidebar)
+
         help_label = QtWidgets.QLabel(
             f"{TOOLTIPS['nav_bits']} {TOOLTIPS['ca_code']}"
         )
         help_label.setWordWrap(True)
-        layout.addWidget(help_label)
+        sidebar_layout.addWidget(help_label)
 
-        control_row = QtWidgets.QHBoxLayout()
+        decode_group = QtWidgets.QGroupBox("Decode setup")
+        decode_layout = QtWidgets.QVBoxLayout(decode_group)
         self.prn_combo = QtWidgets.QComboBox()
         self.prn_combo.addItem("No PRN")
         self.bit_source_combo = QtWidgets.QComboBox()
@@ -37,27 +57,78 @@ class NavigationTab(QtWidgets.QWidget):
             "Choose which tracked prompt component is converted into 20 ms navigation bits."
         )
         self.decode_button = QtWidgets.QPushButton("Decode Selected PRN")
-        control_row.addWidget(QtWidgets.QLabel("Satellite / PRN"))
-        control_row.addWidget(self.prn_combo)
-        control_row.addWidget(QtWidgets.QLabel("Bit source"))
-        control_row.addWidget(self.bit_source_combo)
-        control_row.addWidget(self.decode_button)
-        control_row.addStretch()
-        layout.addLayout(control_row)
+        decode_layout.addWidget(QtWidgets.QLabel("Satellite / PRN"))
+        decode_layout.addWidget(self.prn_combo)
+        decode_layout.addWidget(QtWidgets.QLabel("Bit source"))
+        decode_layout.addWidget(self.bit_source_combo)
+        decode_layout.addWidget(self.decode_button)
+        sidebar_layout.addWidget(decode_group)
 
         self.summary_label = QtWidgets.QLabel("Navigation decoding not started.")
         self.summary_label.setWordWrap(True)
         self.task_status_label = QtWidgets.QLabel("Navigation decoder idle.")
         self.task_status_label.setWordWrap(True)
-        layout.addWidget(self.task_status_label)
+        self.task_progress_bar = QtWidgets.QProgressBar()
+        self.task_progress_bar.setRange(0, 100)
+        self.task_progress_bar.setValue(0)
+        status_group = QtWidgets.QGroupBox("Status")
+        status_layout = QtWidgets.QVBoxLayout(status_group)
+        status_layout.addWidget(self.task_status_label)
+        status_layout.addWidget(self.task_progress_bar)
+        status_layout.addWidget(self.summary_label)
+        sidebar_layout.addWidget(status_group)
+
+        guide_group = QtWidgets.QGroupBox("Quick guide")
+        guide_layout = QtWidgets.QVBoxLayout(guide_group)
         self.stage_hint_label = QtWidgets.QLabel(
             "Navigation decoding uses the tracked PRN only: 1 ms prompt values are summed into 20 ms LNAV bit decisions."
         )
         self.stage_hint_label.setWordWrap(True)
-        layout.addWidget(self.stage_hint_label)
+        guide_layout.addWidget(self.stage_hint_label)
+        sidebar_layout.addWidget(guide_group)
+        sidebar_layout.addStretch()
+        root_splitter.addWidget(sidebar_scroll)
 
-        what_group = QtWidgets.QGroupBox("What am I seeing?")
-        what_layout = QtWidgets.QVBoxLayout(what_group)
+        workspace = QtWidgets.QWidget()
+        workspace_layout = QtWidgets.QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(8)
+
+        plot_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.prompt_plot = pg.PlotWidget(title="1 ms prompt values")
+        self.prompt_plot.setMinimumHeight(300)
+        self.prompt_plot.setToolTip("These are the per-millisecond despread prompt values before 20 ms bit summing.")
+        self.prompt_curve = self.prompt_plot.plot(pen="c")
+        self.bit_plot = pg.PlotWidget(title="20 ms bit accumulations")
+        self.bit_plot.setMinimumHeight(300)
+        self.bit_plot.setToolTip("Each point is the sum of 20 prompt values; its sign becomes one navigation bit.")
+        self.bit_curve = self.bit_plot.plot(pen=None, symbol="o", symbolBrush="y")
+        plot_splitter.addWidget(self.prompt_plot)
+        plot_splitter.addWidget(self.bit_plot)
+        plot_splitter.setStretchFactor(0, 1)
+        plot_splitter.setStretchFactor(1, 1)
+        workspace_layout.addWidget(plot_splitter, stretch=2)
+
+        self.navigation_tabs = QtWidgets.QTabWidget()
+        self.navigation_tabs.setDocumentMode(True)
+        workspace_layout.addWidget(self.navigation_tabs, stretch=2)
+
+        self.bits_text = QtWidgets.QPlainTextEdit()
+        self.bits_text.setReadOnly(True)
+        self.navigation_tabs.addTab(self.bits_text, "Bit Stream")
+
+        self.word_table = QtWidgets.QTableWidget(0, 5)
+        self.word_table.setHorizontalHeaderLabels(["Start bit", "Label", "Parity", "Hex", "Bits"])
+        self._configure_table(self.word_table)
+        self.word_table.horizontalHeader().setStretchLastSection(True)
+        self.navigation_tabs.addTab(self.word_table, "LNAV Words")
+
+        self.evidence_text = QtWidgets.QPlainTextEdit()
+        self.evidence_text.setReadOnly(True)
+        self.navigation_tabs.addTab(self.evidence_text, "Evidence")
+
+        guide_page = QtWidgets.QWidget()
+        what_layout = QtWidgets.QVBoxLayout(guide_page)
         what_label = QtWidgets.QLabel(
             "Navigation works on tracked Prompt values, not on raw IQ. "
             "Each prompt point is already carrier-wiped and despread for the selected PRN. "
@@ -71,41 +142,30 @@ class NavigationTab(QtWidgets.QWidget):
         )
         bit_help_label.setWordWrap(True)
         what_layout.addWidget(bit_help_label)
-        layout.addWidget(what_group)
+        what_layout.addStretch()
+        self.navigation_tabs.addTab(guide_page, "Guide")
 
-        self.task_progress_bar = QtWidgets.QProgressBar()
-        self.task_progress_bar.setRange(0, 100)
-        self.task_progress_bar.setValue(0)
-        layout.addWidget(self.task_progress_bar)
-
-        layout.addWidget(self.summary_label)
-
-        self.evidence_text = QtWidgets.QPlainTextEdit()
-        self.evidence_text.setReadOnly(True)
-        self.evidence_text.setMaximumHeight(150)
-        layout.addWidget(self.evidence_text)
-
-        self.prompt_plot = pg.PlotWidget(title="1 ms prompt values")
-        self.prompt_plot.setToolTip("These are the per-millisecond despread prompt values before 20 ms bit summing.")
-        self.prompt_curve = self.prompt_plot.plot(pen="c")
-        layout.addWidget(self.prompt_plot, stretch=1)
-
-        self.bit_plot = pg.PlotWidget(title="20 ms bit accumulations")
-        self.bit_plot.setToolTip("Each point is the sum of 20 prompt values; its sign becomes one navigation bit.")
-        self.bit_curve = self.bit_plot.plot(pen=None, symbol="o", symbolBrush="y")
-        layout.addWidget(self.bit_plot, stretch=1)
-
-        self.bits_text = QtWidgets.QPlainTextEdit()
-        self.bits_text.setReadOnly(True)
-        layout.addWidget(self.bits_text, stretch=1)
-
-        self.word_table = QtWidgets.QTableWidget(0, 5)
-        self.word_table.setHorizontalHeaderLabels(["Start bit", "Label", "Parity", "Hex", "Bits"])
-        self.word_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.word_table, stretch=1)
+        root_splitter.addWidget(workspace)
+        root_splitter.setStretchFactor(0, 0)
+        root_splitter.setStretchFactor(1, 1)
+        root_splitter.setSizes([340, 1060])
 
         self.decode_button.clicked.connect(self.decode_requested.emit)
         self.prn_combo.currentIndexChanged.connect(self._emit_selection_changed)
+
+    @staticmethod
+    def _configure_table(table: QtWidgets.QTableWidget) -> None:
+        """Make navigation word tables readable at narrow and wide sizes."""
+
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        table.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setHighlightSections(False)
+        table.horizontalHeader().setMinimumSectionSize(70)
 
     def _emit_selection_changed(self) -> None:
         data = self.prn_combo.currentData()
@@ -193,3 +253,6 @@ class NavigationTab(QtWidgets.QWidget):
             self.word_table.setItem(row, 2, QtWidgets.QTableWidgetItem("OK" if word.parity_ok else "Fail"))
             self.word_table.setItem(row, 3, QtWidgets.QTableWidgetItem(word.hex_word))
             self.word_table.setItem(row, 4, QtWidgets.QTableWidgetItem(word.bits))
+        self.word_table.resizeColumnsToContents()
+        self.word_table.horizontalHeader().setStretchLastSection(True)
+        self.navigation_tabs.setCurrentWidget(self.word_table)
