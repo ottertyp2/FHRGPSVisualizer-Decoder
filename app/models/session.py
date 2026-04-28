@@ -151,6 +151,16 @@ class BitDecisionResult:
 
 
 @dataclass(slots=True)
+class NavigationField:
+    """One human-readable field extracted from an LNAV subframe."""
+
+    name: str
+    value: str
+    bit_range: str
+    description: str = ""
+
+
+@dataclass(slots=True)
 class NavigationWord:
     """A single 30-bit LNAV word."""
 
@@ -160,6 +170,26 @@ class NavigationWord:
     parity_ok: bool
     is_inverted: bool
     label: str = ""
+    corrected: bool = False
+    corrected_bit_index: int | None = None
+    confidence: float | None = None
+
+
+@dataclass(slots=True)
+class NavigationSubframe:
+    """A coarse 10-word LNAV subframe view."""
+
+    start_bit: int
+    subframe_id: int | None
+    tow_seconds: int | None
+    words: list[NavigationWord]
+    fields: list[NavigationField]
+    page_id: int | None = None
+    page_label: str = ""
+    category: str = ""
+    parity_ok_words: int = 0
+    corrected_words: int = 0
+    valid: bool = False
 
 
 @dataclass(slots=True)
@@ -169,7 +199,10 @@ class NavigationDecodeResult:
     preamble_indices: list[int] = field(default_factory=list)
     word_start_indices: list[int] = field(default_factory=list)
     words: list[NavigationWord] = field(default_factory=list)
+    subframes: list[NavigationSubframe] = field(default_factory=list)
     parity_ok_count: int = 0
+    corrected_word_count: int = 0
+    failed_word_count: int = 0
     summary_lines: list[str] = field(default_factory=list)
 
 

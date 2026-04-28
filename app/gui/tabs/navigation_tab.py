@@ -117,11 +117,34 @@ class NavigationTab(QtWidgets.QWidget):
         self.bits_text.setReadOnly(True)
         self.navigation_tabs.addTab(self.bits_text, "Bit Stream")
 
-        self.word_table = QtWidgets.QTableWidget(0, 5)
-        self.word_table.setHorizontalHeaderLabels(["Start bit", "Label", "Parity", "Hex", "Bits"])
+        self._current_nav_result: NavigationDecodeResult | None = None
+
+        self.word_table = QtWidgets.QTableWidget(0, 7)
+        self.word_table.setHorizontalHeaderLabels(
+            ["Start bit", "Label", "Parity", "Corrected", "Corrected bit", "Hex", "Bits"]
+        )
         self._configure_table(self.word_table)
         self.word_table.horizontalHeader().setStretchLastSection(True)
         self.navigation_tabs.addTab(self.word_table, "LNAV Words")
+
+        self.subframe_table = QtWidgets.QTableWidget(0, 7)
+        self.subframe_table.setHorizontalHeaderLabels(
+            ["Start bit", "Subframe ID", "TOW [s]", "Category", "Parity OK", "Corrected", "Status"]
+        )
+        self._configure_table(self.subframe_table)
+        self.subframe_table.horizontalHeader().setStretchLastSection(True)
+        self.subframe_table.itemSelectionChanged.connect(self._refresh_decoded_fields_table)
+        self.navigation_tabs.addTab(self.subframe_table, "Subframes")
+
+        self.fields_table = QtWidgets.QTableWidget(0, 5)
+        self.fields_table.setHorizontalHeaderLabels(["Subframe", "Field", "Value", "Bit range", "Description"])
+        self._configure_table(self.fields_table)
+        self.fields_table.horizontalHeader().setStretchLastSection(True)
+        self.navigation_tabs.addTab(self.fields_table, "Decoded Fields")
+
+        self.almanac_ephemeris_text = QtWidgets.QPlainTextEdit()
+        self.almanac_ephemeris_text.setReadOnly(True)
+        self.navigation_tabs.addTab(self.almanac_ephemeris_text, "Almanac / Ephemeris")
 
         self.evidence_text = QtWidgets.QPlainTextEdit()
         self.evidence_text.setReadOnly(True)
@@ -166,6 +189,79 @@ class NavigationTab(QtWidgets.QWidget):
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setHighlightSections(False)
         table.horizontalHeader().setMinimumSectionSize(70)
+
+    @staticmethod
+    def _subframe_status(parity_ok_words: int, total_words: int, corrected_words: int) -> str:
+        """Return a compact status label for the subframe table."""
+
+        if total_words and parity_ok_words == total_words:
+            return "valid" if corrected_words == 0 else "valid after correction"
+        if parity_ok_words:
+            return "partial / uncertain"
+        return "unverified"
+
+    def _refresh_decoded_fields_table(self) -> None:
+        """Show decoded fields for selected subframes, or all if none is selected."""
+
+        nav_result = self._current_nav_result
+        if nav_result is None:
+            self.fields_table.setRowCount(0)
+            return
+
+        selected_rows = sorted(index.row() for index in self.subframe_table.selectionModel().selectedRows())
+        if selected_rows:
+            subframes = [nav_result.subframes[row] for row in selected_rows if row < len(nav_result.subframes)]
+        else:
+            subframes = nav_result.subframes
+
+        rows = [(subframe, field) for subframe in subframes for field in subframe.fields]
+        self.fields_table.setRowCount(len(rows))
+        for row, (subframe, field) in enumerate(rows):
+            subframe_label = (
+                f"{subframe.subframe_id} @ {subframe.start_bit}"
+                if subframe.subframe_id is not None
+                else f"? @ {subframe.start_bit}"
+            )
+            self.fields_table.setItem(row, 0, QtWidgets.QTableWidgetItem(subframe_label))
+            self.fields_table.setItem(row, 1, QtWidgets.QTableWidgetItem(field.name))
+            self.fields_table.setItem(row, 2, QtWidgets.QTableWidgetItem(field.value))
+            self.fields_table.setItem(row, 3, QtWidgets.QTableWidgetItem(field.bit_range))
+            self.fields_table.setItem(row, 4, QtWidgets.QTableWidgetItem(field.description))
+        self.fields_table.resizeColumnsToContents()
+        self.fields_table.horizontalHeader().setStretchLastSection(True)
+
+    def _format_almanac_ephemeris(self, nav_result: NavigationDecodeResult) -> str:
+        """Build a grouped raw payload overview for clock, ephemeris, and almanac areas."""
+
+        if not nav_result.subframes:
+            return "No complete 10-word subframes decoded yet."
+
+        groups = [
+            ("Clock/Health", [subframe for subframe in nav_result.subframes if subframe.subframe_id == 1]),
+            ("Ephemeris part 1", [subframe for subframe in nav_result.subframes if subframe.subframe_id == 2]),
+            ("Ephemeris part 2", [subframe for subframe in nav_result.subframes if subframe.subframe_id == 3]),
+            (
+                "Almanac pages",
+                [subframe for subframe in nav_result.subframes if subframe.subframe_id in (4, 5)],
+            ),
+        ]
+        lines: list[str] = []
+        for title, subframes in groups:
+            lines.append(title)
+            if not subframes:
+                lines.append("  raw / not fully decoded yet: no matching subframe decoded.")
+                lines.append("")
+                continue
+            for subframe in subframes:
+                tow = subframe.tow_seconds if subframe.tow_seconds is not None else "?"
+                page = f", {subframe.page_label}" if subframe.page_label else ""
+                lines.append(
+                    f"  start bit {subframe.start_bit}, TOW {tow}, parity "
+                    f"{subframe.parity_ok_words}/{len(subframe.words)}, corrected {subframe.corrected_words}{page}"
+                )
+                lines.append("  raw / not fully decoded yet")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     def _emit_selection_changed(self) -> None:
         data = self.prn_combo.currentData()
@@ -213,11 +309,15 @@ class NavigationTab(QtWidgets.QWidget):
     ) -> None:
         """Refresh the bit and LNAV views."""
 
+        self._current_nav_result = nav_result
         self.summary_label.setText(
             f"PRN {prn}: bit offset {bit_result.best_offset_ms} ms, "
             f"{bit_result.bit_values.size} hard decisions, "
             f"{len(nav_result.preamble_indices)} preambles, "
-            f"{nav_result.parity_ok_count} words with valid parity."
+            f"{len(nav_result.subframes)} subframes, "
+            f"{nav_result.parity_ok_count} parity-valid words, "
+            f"{nav_result.corrected_word_count} corrected words, "
+            f"{nav_result.failed_word_count} failed/unchecked words."
         )
         self.prompt_curve.setData(np.arange(bit_result.prompt_ms.size), bit_result.prompt_ms)
         self.bit_curve.setData(np.arange(bit_result.bit_sums.size), bit_result.bit_sums)
@@ -235,7 +335,10 @@ class NavigationTab(QtWidgets.QWidget):
             [
                 f"20 ms integration offset: {bit_result.best_offset_ms} ms",
                 f"Detected preambles: {len(nav_result.preamble_indices)}",
+                f"Decoded subframes: {len(nav_result.subframes)}",
                 f"Parity-valid words: {nav_result.parity_ok_count}",
+                f"Corrected words: {nav_result.corrected_word_count}",
+                f"Failed/unchecked words: {nav_result.failed_word_count}",
                 "Interpretation: this view shows the actual bit stream that was formed after despreading and tracking for the selected PRN only.",
             ]
         )
@@ -251,8 +354,50 @@ class NavigationTab(QtWidgets.QWidget):
             self.word_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(word.start_bit)))
             self.word_table.setItem(row, 1, QtWidgets.QTableWidgetItem(word.label or "-"))
             self.word_table.setItem(row, 2, QtWidgets.QTableWidgetItem("OK" if word.parity_ok else "Fail"))
-            self.word_table.setItem(row, 3, QtWidgets.QTableWidgetItem(word.hex_word))
-            self.word_table.setItem(row, 4, QtWidgets.QTableWidgetItem(word.bits))
+            self.word_table.setItem(row, 3, QtWidgets.QTableWidgetItem("yes" if word.corrected else "no"))
+            self.word_table.setItem(
+                row,
+                4,
+                QtWidgets.QTableWidgetItem(
+                    str(word.corrected_bit_index) if word.corrected_bit_index is not None else "-"
+                ),
+            )
+            self.word_table.setItem(row, 5, QtWidgets.QTableWidgetItem(word.hex_word))
+            self.word_table.setItem(row, 6, QtWidgets.QTableWidgetItem(word.bits))
         self.word_table.resizeColumnsToContents()
         self.word_table.horizontalHeader().setStretchLastSection(True)
+
+        self.subframe_table.blockSignals(True)
+        self.subframe_table.setRowCount(len(nav_result.subframes))
+        for row, subframe in enumerate(nav_result.subframes):
+            self.subframe_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(subframe.start_bit)))
+            self.subframe_table.setItem(
+                row,
+                1,
+                QtWidgets.QTableWidgetItem(str(subframe.subframe_id) if subframe.subframe_id is not None else "-"),
+            )
+            self.subframe_table.setItem(
+                row,
+                2,
+                QtWidgets.QTableWidgetItem(str(subframe.tow_seconds) if subframe.tow_seconds is not None else "-"),
+            )
+            self.subframe_table.setItem(row, 3, QtWidgets.QTableWidgetItem(subframe.category or "Unknown"))
+            self.subframe_table.setItem(
+                row,
+                4,
+                QtWidgets.QTableWidgetItem(f"{subframe.parity_ok_words}/{len(subframe.words)}"),
+            )
+            self.subframe_table.setItem(row, 5, QtWidgets.QTableWidgetItem(str(subframe.corrected_words)))
+            self.subframe_table.setItem(
+                row,
+                6,
+                QtWidgets.QTableWidgetItem(
+                    self._subframe_status(subframe.parity_ok_words, len(subframe.words), subframe.corrected_words)
+                ),
+            )
+        self.subframe_table.blockSignals(False)
+        self.subframe_table.resizeColumnsToContents()
+        self.subframe_table.horizontalHeader().setStretchLastSection(True)
+        self._refresh_decoded_fields_table()
+        self.almanac_ephemeris_text.setPlainText(self._format_almanac_ephemeris(nav_result))
         self.navigation_tabs.setCurrentWidget(self.word_table)

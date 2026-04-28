@@ -2,12 +2,149 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from app.dsp.acquisition import AcquisitionConfig, acquire_signal
 from app.dsp.bitsync import extract_navigation_bits
 from app.dsp.demo import generate_demo_signal
-from app.dsp.navdecode import decode_navigation_bits, decode_navigation_from_tracking
+from app.dsp.navdecode import (
+    PREAMBLE,
+    build_subframes,
+    check_lnav_word,
+    compute_lnav_parity,
+    decode_navigation_bits,
+    decode_navigation_from_tracking,
+    parse_how,
+)
 from app.dsp.tracking import track_signal
-from app.models import SessionConfig
+from app.models import BitDecisionResult, SessionConfig
+
+
+def _int_to_bits(value: int, width: int) -> list[int]:
+    return [(value >> shift) & 1 for shift in range(width - 1, -1, -1)]
+
+
+def _make_lnav_word(data_bits: list[int], previous_word: list[int] | None = None) -> list[int]:
+    previous = previous_word or [0] * 30
+    d29_star = previous[28]
+    d30_star = previous[29]
+    transmitted_data = [bit ^ d30_star for bit in data_bits]
+    parity = compute_lnav_parity(data_bits, d29_star, d30_star)
+    return transmitted_data + parity
+
+
+def _make_synthetic_subframe(
+    subframe_id: int = 1,
+    tow_count: int = 100,
+    page_id: int = 12,
+) -> list[list[int]]:
+    tlm_data = [int(bit) for bit in PREAMBLE] + _int_to_bits(0x1234, 16)
+    how_data = _int_to_bits(tow_count, 17) + [0, 0] + _int_to_bits(subframe_id, 3) + [0, 0]
+    payload = []
+    for word_number in range(3, 11):
+        data = _int_to_bits((word_number * 0x1555 + subframe_id) & 0xFFFFFF, 24)
+        if word_number == 3 and subframe_id in (4, 5):
+            data = [0, 1] + _int_to_bits(page_id, 6) + data[8:]
+        payload.append(data)
+
+    words: list[list[int]] = []
+    previous_word: list[int] | None = None
+    for data_bits in [tlm_data, how_data, *payload]:
+        word = _make_lnav_word(data_bits, previous_word)
+        words.append(word)
+        previous_word = word
+    return words
+
+
+def _flatten_words(words: list[list[int]]) -> np.ndarray:
+    return np.asarray([bit for word in words for bit in word], dtype=np.int8)
+
+
+def _make_bit_result(bit_values: np.ndarray, confidences: np.ndarray | None = None) -> BitDecisionResult:
+    if confidences is None:
+        confidences = np.ones(bit_values.size, dtype=np.float32)
+    return BitDecisionResult(
+        prompt_ms=np.zeros(bit_values.size * 20, dtype=np.float32),
+        best_offset_ms=0,
+        bit_sums=np.where(bit_values > 0, 1.0, -1.0).astype(np.float32),
+        bit_values=bit_values.astype(np.int8),
+        confidences=confidences.astype(np.float32),
+        bit_start_ms=np.arange(bit_values.size, dtype=np.int32) * 20,
+    )
+
+
+def test_lnav_parity_valid_word_remains_valid() -> None:
+    words = _make_synthetic_subframe()
+
+    assert check_lnav_word(words[0])
+
+    nav_result = decode_navigation_bits(_make_bit_result(_flatten_words(words)))
+    first_word = nav_result.words[0]
+
+    assert first_word.parity_ok
+    assert not first_word.corrected
+    assert first_word.corrected_bit_index is None
+
+
+def test_single_low_confidence_bit_is_corrected() -> None:
+    words = _make_synthetic_subframe(subframe_id=2)
+    bit_values = _flatten_words(words)
+    flipped_index = 2 * 30 + 5
+    bit_values[flipped_index] ^= 1
+    confidences = np.ones(bit_values.size, dtype=np.float32)
+    confidences[flipped_index] = 0.01
+
+    nav_result = decode_navigation_bits(_make_bit_result(bit_values, confidences))
+    corrected_word = next(word for word in nav_result.words if word.start_bit == 60)
+
+    assert corrected_word.parity_ok
+    assert corrected_word.corrected
+    assert corrected_word.corrected_bit_index == 5
+    assert nav_result.corrected_word_count >= 1
+    assert nav_result.subframes[0].corrected_words == 1
+
+
+def test_two_low_confidence_errors_are_not_corrected() -> None:
+    words = _make_synthetic_subframe(subframe_id=2)
+    bit_values = _flatten_words(words)
+    flipped_indices = [2 * 30 + 5, 2 * 30 + 6]
+    for index in flipped_indices:
+        bit_values[index] ^= 1
+    confidences = np.ones(bit_values.size, dtype=np.float32)
+    for index in flipped_indices:
+        confidences[index] = 0.01
+
+    nav_result = decode_navigation_bits(_make_bit_result(bit_values, confidences))
+    failed_word = next(word for word in nav_result.words if word.start_bit == 60)
+
+    assert not failed_word.parity_ok
+    assert not failed_word.corrected
+    assert failed_word.corrected_bit_index is None
+
+
+def test_preamble_and_ten_words_group_into_navigation_subframe() -> None:
+    words = _make_synthetic_subframe(subframe_id=1)
+    bit_values = _flatten_words(words).astype(int).tolist()
+
+    subframes = build_subframes(bit_values, [0], confidences=np.ones(len(bit_values), dtype=np.float32))
+
+    assert len(subframes) == 1
+    assert subframes[0].start_bit == 0
+    assert len(subframes[0].words) == 10
+    assert subframes[0].category == "Clock / satellite health"
+
+
+def test_subframe_id_is_decoded_from_synthetic_how() -> None:
+    words = _make_synthetic_subframe(subframe_id=3, tow_count=42)
+    nav_result = decode_navigation_bits(_make_bit_result(_flatten_words(words)))
+    subframe = nav_result.subframes[0]
+    how = parse_how(subframe.words[1], subframe.words[0])
+
+    assert subframe.subframe_id == 3
+    assert subframe.tow_seconds == 252
+    assert subframe.category == "Ephemeris part 2"
+    assert how["subframe_id"] == 3
+    assert how["tow_seconds"] == 252
 
 
 def test_tracking_and_nav_pipeline() -> None:
