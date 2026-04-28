@@ -76,6 +76,10 @@ def test_main_window_smoke() -> None:
     assert window.acquisition_tab.heatmap_plot.minimumHeight() >= 360
     assert window.tracking_tab.tracking_tabs.count() == 4
     assert window.tracking_tab.tracking_tabs.tabText(0) == "IQ Stages"
+    assert window.tracking_tab.prompt_plot.plotItem.legend is not None
+    assert window.tracking_tab.freq_plot.plotItem.legend is not None
+    assert window.tracking_tab.prompt_i_curve.opts["name"] == "Prompt I"
+    assert window.tracking_tab.doppler_curve.opts["name"] == "Doppler estimate"
     assert window.navigation_tab.navigation_tabs.count() == 7
     assert window.navigation_tab.navigation_tabs.tabText(1) == "LNAV Words"
     assert window.navigation_tab.navigation_tabs.tabText(2) == "Subframes"

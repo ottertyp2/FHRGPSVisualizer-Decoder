@@ -167,30 +167,35 @@ class TrackingTab(QtWidgets.QWidget):
         self.prompt_plot = pg.PlotWidget(title="Prompt I/Q")
         self.prompt_plot.setMinimumHeight(210)
         self.prompt_plot.setToolTip("Prompt I/Q is one complex value per 1 ms after carrier wipeoff and PRN despreading.")
-        self.prompt_i_curve = self.prompt_plot.plot(pen="c", name="I")
-        self.prompt_q_curve = self.prompt_plot.plot(pen="m", name="Q")
+        self._add_plot_legend(self.prompt_plot)
+        self.prompt_i_curve = self.prompt_plot.plot(pen="c", name="Prompt I")
+        self.prompt_q_curve = self.prompt_plot.plot(pen="m", name="Prompt Q")
 
         self.mag_plot = pg.PlotWidget(title="Early / Prompt / Late magnitude")
         self.mag_plot.setMinimumHeight(210)
         self.mag_plot.setToolTip("Prompt should usually sit above Early/Late when the code phase is aligned.")
-        self.early_curve = self.mag_plot.plot(pen="r")
-        self.prompt_mag_curve = self.mag_plot.plot(pen="y")
-        self.late_curve = self.mag_plot.plot(pen="g")
+        self._add_plot_legend(self.mag_plot)
+        self.early_curve = self.mag_plot.plot(pen="r", name="Early")
+        self.prompt_mag_curve = self.mag_plot.plot(pen="y", name="Prompt")
+        self.late_curve = self.mag_plot.plot(pen="g", name="Late")
 
         self.error_plot = pg.PlotWidget(title="Code and carrier error")
         self.error_plot.setMinimumHeight(210)
         self.error_plot.setToolTip("Code error steers PRN timing; carrier error steers residual Doppler/phase.")
-        self.code_error_curve = self.error_plot.plot(pen="w")
-        self.carrier_error_curve = self.error_plot.plot(pen="c")
+        self._add_plot_legend(self.error_plot)
+        self.code_error_curve = self.error_plot.plot(pen="w", name="Code error")
+        self.carrier_error_curve = self.error_plot.plot(pen="c", name="Carrier error")
 
         self.freq_plot = pg.PlotWidget(title="Estimated Doppler and code frequency")
         self.freq_plot.setMinimumHeight(210)
-        self.doppler_curve = self.freq_plot.plot(pen="y")
-        self.code_freq_curve = self.freq_plot.plot(pen="m")
+        self._add_plot_legend(self.freq_plot)
+        self.doppler_curve = self.freq_plot.plot(pen="y", name="Doppler estimate")
+        self.code_freq_curve = self.freq_plot.plot(pen="m", name="Code frequency estimate")
 
         self.lock_plot = pg.PlotWidget(title="Lock metric")
         self.lock_plot.setMinimumHeight(180)
-        self.lock_curve = self.lock_plot.plot(pen="g")
+        self._add_plot_legend(self.lock_plot)
+        self.lock_curve = self.lock_plot.plot(pen="g", name="Lock metric")
 
         loop_layout_grid.addWidget(self.prompt_plot, 0, 0)
         loop_layout_grid.addWidget(self.mag_plot, 0, 1)
@@ -232,6 +237,14 @@ class TrackingTab(QtWidgets.QWidget):
         for spin in (self.early_late_spin, self.dll_gain_spin, self.pll_gain_spin, self.fll_gain_spin):
             spin.valueChanged.connect(lambda *_: self.settings_changed.emit())
         self.prn_combo.currentIndexChanged.connect(self._emit_selection_changed)
+
+    @staticmethod
+    def _add_plot_legend(plot: pg.PlotWidget) -> None:
+        """Add a compact legend before named tracking curves are attached."""
+
+        legend = plot.addLegend(offset=(-10, 10))
+        legend.setBrush(pg.mkBrush(20, 20, 20, 180))
+        legend.setPen(pg.mkPen(120, 120, 120, 180))
 
     def reset_loop_controls(self) -> None:
         """Restore the default teaching-oriented loop parameters."""
