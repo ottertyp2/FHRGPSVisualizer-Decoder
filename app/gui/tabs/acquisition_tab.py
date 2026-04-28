@@ -669,7 +669,7 @@ class AcquisitionTab(QtWidgets.QWidget):
             else ""
         )
         self.summary_label.setText(
-            f"Best peak: PRN {result.best_candidate.prn}, "
+            f"Best peak: PRN {result.prn}, "
             f"freq {result.best_candidate.carrier_frequency_hz:.1f} Hz, "
             f"Doppler {result.best_candidate.doppler_hz:+.1f} Hz, "
             f"code {result.best_candidate.code_phase_samples}, "
@@ -701,7 +701,7 @@ class AcquisitionTab(QtWidgets.QWidget):
             interpretation = acquisition_interpretation(sat_result)
             tracking_status = "tracked" if sat_result.prn in tracked_prns else "-"
             navigation_status = "decoded" if sat_result.prn in decoded_prns else "-"
-            self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(candidate.prn)))
+            self.satellite_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(sat_result.prn)))
             self.satellite_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{candidate.metric:.2f}"))
             self.satellite_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(sat_result.consistent_segments)))
             self.satellite_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{candidate.carrier_frequency_hz:.1f}"))

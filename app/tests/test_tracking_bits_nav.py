@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from app.dsp.acquisition import AcquisitionConfig, acquire_signal
 from app.dsp.bitsync import extract_navigation_bits
@@ -17,7 +18,7 @@ from app.dsp.navdecode import (
     parse_how,
 )
 from app.dsp.tracking import track_signal
-from app.models import BitDecisionResult, SessionConfig
+from app.models import AcquisitionCandidate, AcquisitionResult, BitDecisionResult, SessionConfig
 
 
 def _int_to_bits(value: int, width: int) -> list[int]:
@@ -174,6 +175,52 @@ def test_tracking_and_nav_pipeline() -> None:
     assert bit_result.bit_values.size >= 5
     nav_result = decode_navigation_bits(bit_result)
     assert len(nav_result.summary_lines) >= 1
+
+
+def test_tracking_rejects_prn_mismatch_between_session_and_acquisition() -> None:
+    acquisition = AcquisitionResult(
+        prn=3,
+        sample_rate_hz=1_000_000.0,
+        search_center_hz=0.0,
+        doppler_bins_hz=np.asarray([0.0], dtype=np.float32),
+        code_phases_samples=np.asarray([0], dtype=np.int32),
+        heatmap=np.ones((1, 1), dtype=np.float32),
+        best_candidate=AcquisitionCandidate(
+            prn=3,
+            doppler_hz=0.0,
+            carrier_frequency_hz=0.0,
+            code_phase_samples=0,
+            metric=9.0,
+        ),
+    )
+    session = SessionConfig(sample_rate=1_000_000.0, sample_count=1_000, tracking_ms=1, prn=8)
+    samples = np.zeros(1_000, dtype=np.complex64)
+
+    with pytest.raises(ValueError, match="Tracking PRN mismatch"):
+        track_signal(samples, session, acquisition)
+
+
+def test_tracking_rejects_prn_mismatch_inside_acquisition_result() -> None:
+    acquisition = AcquisitionResult(
+        prn=3,
+        sample_rate_hz=1_000_000.0,
+        search_center_hz=0.0,
+        doppler_bins_hz=np.asarray([0.0], dtype=np.float32),
+        code_phases_samples=np.asarray([0], dtype=np.int32),
+        heatmap=np.ones((1, 1), dtype=np.float32),
+        best_candidate=AcquisitionCandidate(
+            prn=8,
+            doppler_hz=0.0,
+            carrier_frequency_hz=0.0,
+            code_phase_samples=0,
+            metric=9.0,
+        ),
+    )
+    session = SessionConfig(sample_rate=1_000_000.0, sample_count=1_000, tracking_ms=1, prn=3)
+    samples = np.zeros(1_000, dtype=np.complex64)
+
+    with pytest.raises(ValueError, match="Acquisition PRN mismatch"):
+        track_signal(samples, session, acquisition)
 
 
 def test_navigation_decode_pipeline_reports_progress() -> None:

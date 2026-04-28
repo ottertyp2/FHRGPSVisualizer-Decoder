@@ -31,8 +31,16 @@ def _track_blocks(
     samples_per_ms = int(round(session.sample_rate * 1e-3))
     if max_ms <= 0:
         raise ValueError("Not enough samples for 1 ms tracking updates.")
-
     best = acquisition.best_candidate
+    if int(best.prn) != int(acquisition.prn):
+        raise ValueError(
+            f"Acquisition PRN mismatch: result PRN {acquisition.prn} does not match candidate PRN {best.prn}."
+        )
+    if int(session.prn) != int(acquisition.prn):
+        raise ValueError(
+            f"Tracking PRN mismatch: session PRN {session.prn} does not match acquisition PRN {acquisition.prn}."
+        )
+
     spacing = float(session.early_late_spacing_chips)
     code_phase_chips = code_phase_samples_to_chips(best.code_phase_samples, session.sample_rate)
     code_freq = CA_CODE_RATE_HZ
@@ -68,16 +76,16 @@ def _track_blocks(
         carrier = np.exp(-1j * (carrier_phase + 2.0 * np.pi * carrier_freq * block_time))
         wiped = block * carrier
 
-        prompt_code = sample_ca_code(session.prn, session.sample_rate, samples_per_ms, code_phase_chips, code_freq)
+        prompt_code = sample_ca_code(acquisition.prn, session.sample_rate, samples_per_ms, code_phase_chips, code_freq)
         early_code = sample_ca_code(
-            session.prn,
+            acquisition.prn,
             session.sample_rate,
             samples_per_ms,
             code_phase_chips - spacing / 2.0,
             code_freq,
         )
         late_code = sample_ca_code(
-            session.prn,
+            acquisition.prn,
             session.sample_rate,
             samples_per_ms,
             code_phase_chips + spacing / 2.0,
@@ -142,12 +150,12 @@ def _track_blocks(
     if log_callback:
         state = "locked" if lock_detected else "not locked"
         log_callback(
-            f"Tracking PRN {session.prn}: processed {valid} ms, final carrier {carrier_freq:.1f} Hz "
+            f"Tracking PRN {acquisition.prn}: processed {valid} ms, final carrier {carrier_freq:.1f} Hz "
             f"(relative Doppler {doppler_est[valid - 1]:+.1f} Hz), {state}."
         )
 
     return TrackingState(
-        prn=session.prn,
+        prn=acquisition.prn,
         times_s=times_s,
         prompt_i=prompt_i[:valid],
         prompt_q=prompt_q[:valid],

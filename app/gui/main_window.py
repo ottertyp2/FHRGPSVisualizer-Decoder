@@ -908,11 +908,13 @@ class MainWindow(QtWidgets.QMainWindow):
         """Launch tracking from the current acquisition result."""
 
         selected_prn = self.selected_prn or self.acquisition_tab.prn_spin.value()
-        acquisition = self.acquisition_results_by_prn.get(selected_prn) or self.acquisition_result
+        acquisition = self.acquisition_results_by_prn.get(selected_prn)
+        if acquisition is None and self.acquisition_result is not None and self.acquisition_result.prn == selected_prn:
+            acquisition = self.acquisition_result
         if acquisition is None:
-            self.tracking_tab.set_task_message("Run acquisition before tracking.")
+            self.tracking_tab.set_task_message(f"Run acquisition for PRN {selected_prn} before tracking.")
             self.tracking_tab.set_task_progress(0)
-            QtWidgets.QMessageBox.warning(self, "Tracking", "Run acquisition before tracking.")
+            QtWidgets.QMessageBox.warning(self, "Tracking", f"Run acquisition for PRN {selected_prn} before tracking.")
             return
         self.sync_session_from_ui()
         self.session.prn = selected_prn

@@ -188,6 +188,18 @@ def test_acquisition_peak_slices_use_codephase_and_doppler_axes() -> None:
     assert doppler_peak_value == 20.0
 
 
+def test_acquisition_table_labels_rows_from_result_prn() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    tab = AcquisitionTab()
+    result = _make_acquisition_result(3)
+    result.best_candidate.prn = 8
+
+    tab.update_result(result)
+
+    assert "Best peak: PRN 3" in tab.summary_label.text()
+    assert tab.satellite_table.item(0, 0).text() == "3"
+
+
 def test_session_tab_accepts_large_file_sample_ranges() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
@@ -281,6 +293,20 @@ def test_per_prn_views_keep_all_acquisition_candidates_selectable() -> None:
     assert "Selected PRN 2" in window.acquisition_tab.selected_prn_label.text()
     assert window.acquisition_tab.prn_spin.value() == 2
     assert "Selected PRN: 2" in window.learning_tab.selected_label.text()
+
+
+def test_tracking_requires_acquisition_for_selected_prn(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    warnings = []
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *args, **_kwargs: warnings.append(args))
+    window.acquisition_result = _make_acquisition_result(3)
+    window.selected_prn = 8
+
+    window.start_tracking()
+
+    assert warnings
+    assert window.tracking_tab.task_status_label.text() == "Run acquisition for PRN 8 before tracking."
 
 
 def test_tracking_loop_controls_sync_into_session() -> None:
