@@ -6,6 +6,7 @@ Do not treat "code changed locally" as finished work in this repository.
 
 - If a task is ready to share, you must carry it through `tests -> git status review -> commit -> push`.
 - The push must go through `origin` so the same branch/commit reaches both GitHub and GitLab.
+- The default delivery branch is `main`; do not create, switch to, or push a separate branch unless the user explicitly asks for one.
 - Never silently stop after local edits or tests while claiming the work is delivered.
 - If you intentionally do not commit or do not push, say that explicitly and explain why.
 
@@ -14,11 +15,18 @@ Do not treat "code changed locally" as finished work in this repository.
 Every agent instance working in this repository must do these checks explicitly:
 
 - Read this `AGENTS.md` before making changes.
+- Confirm you are on `main`. If not, return to `main` before editing unless the user explicitly requested another branch.
 - Before finishing a shareable task, review `git status` and `git remote -v`.
 - If the task is ready to share, commit only the intended files.
-- Push the exact same branch/commit through `origin` so both GitHub and GitLab receive it.
+- Push `main` through `origin` so both GitHub and GitLab receive the exact same commit.
 - If the worktree is dirty with unrelated changes, do not silently skip sync; report the situation clearly.
 - If one remote push fails, say which host failed and which host succeeded.
+
+## Communication style
+
+- Keep progress updates and final summaries concise.
+- Lead with what changed, what was tested, and whether it was pushed.
+- Avoid long explanations unless the user asks for detail.
 
 ## Purpose
 
@@ -63,8 +71,9 @@ Agents working here should preserve the project's core priorities:
 - If a change affects workflow or repository conventions, update `AGENTS.md`.
 - Prefer small, reviewable commits with clear messages.
 - Treat GitHub and GitLab as first-class remotes for this project and keep them in sync.
-- After finishing a change that is ready to share, agents should commit the intended files and push the same branch/commit to both hosted repositories.
-- Prefer keeping `origin` configured with both push URLs so one clean `git push origin <branch>` updates GitHub and GitLab together.
+- After finishing a change that is ready to share, agents should commit the intended files on `main` and push `main` to both hosted repositories.
+- Prefer keeping `origin` configured with both push URLs so one clean `git push origin main` updates GitHub and GitLab together.
+- Do not create feature, task, or `codex/` branches unless the user explicitly requests branch-based work.
 - Do not push partial, broken, or unrelated work just to satisfy the sync rule; stage and commit only the files that belong to the task being delivered.
 - If one remote push fails, report it clearly so the repository state can be corrected instead of assuming both hosts were updated.
 - Use `powershell -ExecutionPolicy Bypass -File tools/check_git_sync.ps1` as a quick pre-push verification when needed.
