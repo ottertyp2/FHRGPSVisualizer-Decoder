@@ -244,9 +244,9 @@ This tab joins multiple decoded PRNs into one receiver time and position estimat
 - derives subframe receive times from tracking sample offsets, bit timing, and C/A code phase
 - applies satellite clock correction and Earth-rotation transit correction
 - solves WGS-84 position with a small transparent outlier check
-- shows the GPS week/TOW, UTC estimate, ephemeris rows, pseudorange rows, and a Wachtberg validation distance
+- shows the GPS week/TOW, UTC estimate, ephemeris rows, and pseudorange rows
 
-For `testv4_10min.bin`, use the default `200e6/33` sample-rate hypothesis. A practical Auto PVT starting point is a window near 60 seconds, about 3 seconds of acquisition data, and 45-60 seconds of tracking. The Wachtberg reference is used only as a validation readout after the solve, not as an input to the least-squares position.
+For `testv4_10min.bin`, use the default `200e6/33` sample-rate hypothesis. A practical Auto PVT starting point is a window near 60 seconds, about 3 seconds of acquisition data, and 45-60 seconds of tracking.
 
 ### Benchmark
 

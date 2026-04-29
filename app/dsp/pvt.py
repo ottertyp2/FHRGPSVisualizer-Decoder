@@ -24,7 +24,6 @@ WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
 GPS_WEEK_SECONDS = 604_800.0
 GPS_EPOCH = datetime(1980, 1, 6, tzinfo=UTC)
 GPS_UTC_LEAP_SECONDS = 18
-WACHTBERG_REFERENCE_LLA = (50.616, 7.128, 250.0)
 
 
 @dataclass(slots=True)
@@ -68,7 +67,6 @@ class PVTComputationResult:
     gps_time_of_week_s: float | None
     utc_datetime: datetime | None
     receiver_time_offset_s: float | None
-    validation_distance_to_wachtberg_m: float | None
     residual_rms_m: float | None
     summary_lines: list[str]
 
@@ -183,20 +181,6 @@ def gps_utc_datetime(
 
     gps_time = GPS_EPOCH + timedelta(weeks=int(gps_week), seconds=float(time_of_week_s))
     return gps_time - timedelta(seconds=int(leap_seconds))
-
-
-def _surface_distance_m(left_lla: tuple[float, float, float], right_lla: tuple[float, float, float]) -> float:
-    """Return a short-range haversine distance between two latitude/longitude points."""
-
-    lat1, lon1, _alt1 = left_lla
-    lat2, lon2, _alt2 = right_lla
-    radius_m = 6_371_000.0
-    phi1 = np.deg2rad(lat1)
-    phi2 = np.deg2rad(lat2)
-    dphi = np.deg2rad(lat2 - lat1)
-    dlambda = np.deg2rad(lon2 - lon1)
-    hav = np.sin(dphi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2.0) ** 2
-    return float(2.0 * radius_m * np.arctan2(np.sqrt(hav), np.sqrt(max(0.0, 1.0 - hav))))
 
 
 def _tracking_start_file_time_s(tracking: TrackingState) -> float:
@@ -356,7 +340,6 @@ def compute_pvt_from_navigation(
             gps_time_of_week_s=None,
             utc_datetime=None,
             receiver_time_offset_s=None,
-            validation_distance_to_wachtberg_m=None,
             residual_rms_m=None,
             summary_lines=summary_lines,
         )
@@ -399,10 +382,6 @@ def compute_pvt_from_navigation(
         )
         gps_time_of_week_s = float((np.median([obs.receive_file_time_s for obs in used_observations]) + receiver_time_offset_s) % GPS_WEEK_SECONDS)
         utc_dt = gps_utc_datetime(gps_week, gps_time_of_week_s)
-        validation_distance = _surface_distance_m(
-            (solution.latitude_deg, solution.longitude_deg, solution.altitude_m),
-            WACHTBERG_REFERENCE_LLA,
-        )
         candidate = PVTComputationResult(
             solution=solution,
             observations=used_observations,
@@ -411,7 +390,6 @@ def compute_pvt_from_navigation(
             gps_time_of_week_s=gps_time_of_week_s,
             utc_datetime=utc_dt,
             receiver_time_offset_s=receiver_time_offset_s,
-            validation_distance_to_wachtberg_m=validation_distance,
             residual_rms_m=residual_rms,
             summary_lines=[
                 f"Decoded ephemerides for PRNs {', '.join(str(prn) for prn in sorted(ephemerides))}.",
@@ -444,7 +422,6 @@ def compute_pvt_from_navigation(
         gps_time_of_week_s=None,
         utc_datetime=None,
         receiver_time_offset_s=None,
-        validation_distance_to_wachtberg_m=None,
         residual_rms_m=None,
         summary_lines=summary_lines,
     )

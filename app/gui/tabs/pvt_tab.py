@@ -172,13 +172,6 @@ class PVTTab(QtWidgets.QWidget):
             return
 
         solution = result.solution
-        validation = ""
-        if result.validation_distance_to_wachtberg_m is not None:
-            validation_state = "PASS" if result.validation_distance_to_wachtberg_m <= 10_000.0 else "CHECK"
-            validation = (
-                f"Wachtberg validation: {validation_state}, "
-                f"{result.validation_distance_to_wachtberg_m / 1_000.0:.2f} km from the reference point."
-            )
         self.summary_label.setText(
             f"Position {solution.latitude_deg:.6f}, {solution.longitude_deg:.6f}, "
             f"alt {solution.altitude_m:.1f} m; {solution.used_satellites} PRNs."
@@ -195,7 +188,6 @@ class PVTTab(QtWidgets.QWidget):
             if result.gps_week is not None and result.gps_time_of_week_s is not None
             else "GPS week/TOW: n/a",
             f"UTC estimate: {result.utc_datetime.isoformat()}" if result.utc_datetime else "UTC estimate: n/a",
-            validation,
         ]
         self.solution_text.setPlainText("\n".join(line for line in lines if line))
         self.evidence_text.setPlainText("\n".join(evidence))

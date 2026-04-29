@@ -9,7 +9,7 @@ import numpy as np
 from app.dsp.pvt import expand_gps_week, gps_utc_datetime, lla_to_ecef, solve_position_from_pseudoranges
 
 
-def test_position_solver_recovers_wachtberg_like_receiver() -> None:
+def test_position_solver_recovers_known_receiver() -> None:
     receiver = lla_to_ecef(50.616, 7.128, 250.0)
     satellites = np.asarray(
         [
