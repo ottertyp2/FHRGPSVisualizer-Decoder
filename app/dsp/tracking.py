@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
-from app.dsp.gps_ca import CA_CODE_RATE_HZ, code_phase_samples_to_chips, sample_ca_code
+from app.dsp.compute import get_cupy_module, resolve_compute_plan
+from app.dsp.gps_ca import CA_CODE_LENGTH, CA_CODE_RATE_HZ, code_phase_samples_to_chips, generate_ca_code
 from app.dsp.io import Complex64FileSource
+from app.dsp.tracking_gpu import get_tracking_correlator_kernel
 from app.models import AcquisitionResult, SessionConfig, TrackingState
 
 
@@ -39,10 +42,25 @@ class _TrackingLoop:
 class _CorrelatorOutput:
     """Prompt, early, and late correlator outputs for one millisecond."""
 
-    prompt_code: np.ndarray
+    prompt_code: Any | None
     early: complex
     prompt: complex
     late: complex
+
+
+@dataclass(slots=True)
+class _TrackingMath:
+    """Small NumPy/CuPy adapter for per-millisecond vector work."""
+
+    backend: str
+    array_module: Any
+    base_code: Any
+    block_time: Any
+    sample_indices: Any
+    cupy: Any | None = None
+    gpu_correlator: Any | None = None
+    gpu_output: Any | None = None
+    gpu_threads: int = 256
 
 
 @dataclass(slots=True)
@@ -145,49 +163,194 @@ def _empty_tracking_history(max_ms: int) -> _TrackingHistory:
     )
 
 
-def _wipe_carrier(block: np.ndarray, loop: _TrackingLoop, block_time: np.ndarray) -> np.ndarray:
+def _tracking_math_for_backend(
+    backend: str,
+    prn: int,
+    sample_rate: float,
+    samples_per_ms: int,
+) -> _TrackingMath:
+    """Build NumPy or CuPy arrays shared by all 1 ms tracking updates."""
+
+    if backend == "gpu":
+        cupy = get_cupy_module()
+        if cupy is None:
+            raise RuntimeError("CuPy is not available for GPU tracking.")
+        return _TrackingMath(
+            backend="gpu",
+            array_module=cupy,
+            base_code=cupy.asarray(generate_ca_code(prn), dtype=cupy.float32),
+            block_time=cupy.arange(samples_per_ms, dtype=cupy.float64) / sample_rate,
+            sample_indices=cupy.arange(samples_per_ms, dtype=cupy.float64),
+            cupy=cupy,
+            gpu_correlator=get_tracking_correlator_kernel(),
+            gpu_output=cupy.empty(6, dtype=cupy.float64),
+        )
+
+    return _TrackingMath(
+        backend="cpu",
+        array_module=np,
+        base_code=generate_ca_code(prn),
+        block_time=np.arange(samples_per_ms, dtype=np.float64) / sample_rate,
+        sample_indices=np.arange(samples_per_ms, dtype=np.float64),
+    )
+
+
+def _scalars_to_complex(values: tuple[Any, ...], math: _TrackingMath) -> tuple[complex, ...]:
+    """Copy backend scalars to Python complex values."""
+
+    if math.backend == "gpu" and math.cupy is not None:
+        gpu_values = math.cupy.stack([math.cupy.asarray(value) for value in values])
+        values = tuple(math.cupy.asnumpy(gpu_values).ravel())
+    return tuple(complex(value) for value in values)
+
+
+def _as_numpy_complex64(values: Any, math: _TrackingMath, limit: int | None = None) -> np.ndarray:
+    """Copy a CPU/GPU vector into a compact complex64 NumPy preview."""
+
+    if limit is not None:
+        values = values[: min(int(limit), int(values.size))]
+    if math.backend == "gpu" and math.cupy is not None and not isinstance(values, np.ndarray):
+        values = math.cupy.asnumpy(values)
+    return np.asarray(values, dtype=np.complex64)
+
+
+def _sample_ca_code_for_phase(
+    math: _TrackingMath,
+    code_phase_chips: float,
+    code_freq_hz: float,
+    sample_rate: float,
+) -> Any:
+    """Sample the local C/A code with the active array backend."""
+
+    chip_positions = code_phase_chips + math.sample_indices * code_freq_hz / sample_rate
+    chip_indices = (
+        math.array_module.floor(chip_positions).astype(math.array_module.int64)
+        % CA_CODE_LENGTH
+    )
+    return math.base_code[chip_indices]
+
+
+def _sample_ca_code_for_loop(math: _TrackingMath, loop: _TrackingLoop, sample_rate: float) -> Any:
+    """Sample the prompt C/A code for the current tracking loop state."""
+
+    return _sample_ca_code_for_phase(
+        math,
+        loop.code_phase_chips,
+        loop.code_freq_hz,
+        sample_rate,
+    )
+
+
+def _wipe_carrier(block: Any, loop: _TrackingLoop, math: _TrackingMath) -> Any:
     """Remove the current carrier estimate from one 1 ms block."""
 
-    carrier = np.exp(-1j * (loop.carrier_phase_rad + 2.0 * np.pi * loop.carrier_freq_hz * block_time))
+    xp = math.array_module
+    carrier_phase = loop.carrier_phase_rad + 2.0 * xp.pi * loop.carrier_freq_hz * math.block_time
+    carrier = xp.exp(-1j * carrier_phase)
     return block * carrier
 
 
 def _correlate_prompt_early_late(
-    wiped: np.ndarray,
-    prn: int,
+    wiped: Any,
     sample_rate: float,
     samples_per_ms: int,
     loop: _TrackingLoop,
     early_late_spacing_chips: float,
+    math: _TrackingMath,
 ) -> _CorrelatorOutput:
     """Correlate wiped samples against early, prompt, and late C/A replicas."""
 
-    prompt_code = sample_ca_code(
-        prn,
-        sample_rate,
-        samples_per_ms,
-        loop.code_phase_chips,
-        loop.code_freq_hz,
-    )
-    early_code = sample_ca_code(
-        prn,
-        sample_rate,
-        samples_per_ms,
+    xp = math.array_module
+    prompt_code = _sample_ca_code_for_loop(math, loop, sample_rate)
+    early_code = _sample_ca_code_for_phase(
+        math,
         loop.code_phase_chips - early_late_spacing_chips / 2.0,
         loop.code_freq_hz,
-    )
-    late_code = sample_ca_code(
-        prn,
         sample_rate,
-        samples_per_ms,
+    )
+    late_code = _sample_ca_code_for_phase(
+        math,
         loop.code_phase_chips + early_late_spacing_chips / 2.0,
         loop.code_freq_hz,
+        sample_rate,
     )
+
+    early = xp.vdot(early_code, wiped) / samples_per_ms
+    prompt = xp.vdot(prompt_code, wiped) / samples_per_ms
+    late = xp.vdot(late_code, wiped) / samples_per_ms
+    early_value, prompt_value, late_value = _scalars_to_complex((early, prompt, late), math)
     return _CorrelatorOutput(
         prompt_code=prompt_code,
-        early=np.vdot(early_code, wiped) / samples_per_ms,
-        prompt=np.vdot(prompt_code, wiped) / samples_per_ms,
-        late=np.vdot(late_code, wiped) / samples_per_ms,
+        early=early_value,
+        prompt=prompt_value,
+        late=late_value,
+    )
+
+
+def _correlate_block_gpu(
+    block: Any,
+    session: SessionConfig,
+    samples_per_ms: int,
+    loop: _TrackingLoop,
+    math: _TrackingMath,
+) -> _CorrelatorOutput:
+    """Run carrier wipe and E/P/L correlations in one compact GPU kernel."""
+
+    if math.gpu_correlator is None or math.gpu_output is None:
+        raise RuntimeError("GPU tracking correlator is not initialized.")
+
+    threads = min(math.gpu_threads, max(32, int(2 ** np.ceil(np.log2(samples_per_ms)))))
+    threads = max(32, min(1024, int(threads)))
+    shared_bytes = 6 * threads * np.dtype(np.float64).itemsize
+    math.gpu_correlator(
+        (1,),
+        (threads,),
+        (
+            block,
+            math.base_code,
+            np.int32(samples_per_ms),
+            np.float64(session.sample_rate),
+            np.float64(loop.code_phase_chips),
+            np.float64(loop.code_freq_hz),
+            np.float64(session.early_late_spacing_chips),
+            np.float64(loop.carrier_phase_rad),
+            np.float64(loop.carrier_freq_hz),
+            math.gpu_output,
+        ),
+        shared_mem=shared_bytes,
+    )
+    values = math.cupy.asnumpy(math.gpu_output) if math.cupy is not None else np.zeros(6)
+    return _CorrelatorOutput(
+        prompt_code=None,
+        early=complex(values[0], values[1]),
+        prompt=complex(values[2], values[3]),
+        late=complex(values[4], values[5]),
+    )
+
+
+def _correlate_block(
+    block: Any,
+    session: SessionConfig,
+    samples_per_ms: int,
+    loop: _TrackingLoop,
+    math: _TrackingMath,
+) -> tuple[_CorrelatorOutput, Any | None]:
+    """Correlate one block and return the wiped block when it was materialized."""
+
+    if math.backend == "gpu" and math.gpu_correlator is not None:
+        return _correlate_block_gpu(block, session, samples_per_ms, loop, math), None
+
+    wiped = _wipe_carrier(block, loop, math)
+    return (
+        _correlate_prompt_early_late(
+            wiped,
+            session.sample_rate,
+            samples_per_ms,
+            loop,
+            float(session.early_late_spacing_chips),
+            math,
+        ),
+        wiped,
     )
 
 
@@ -256,16 +419,17 @@ def _store_tracking_outputs(
 def _store_iq_previews(
     history: _TrackingHistory,
     raw_preview_source: np.ndarray | None,
-    block: np.ndarray,
-    wiped: np.ndarray,
-    prompt_code: np.ndarray,
+    block: Any,
+    wiped: Any,
+    prompt_code: Any,
+    math: _TrackingMath,
 ) -> None:
     """Keep small IQ previews for the GUI diagnostic plots."""
 
     preview_source = raw_preview_source if raw_preview_source is not None and raw_preview_source.size else block
-    history.raw_preview = preview_source[: min(4_000, preview_source.size)].astype(np.complex64, copy=False)
-    history.wiped_preview = wiped[: min(4_000, wiped.size)].astype(np.complex64, copy=False)
-    history.despread_preview = (wiped * prompt_code)[: min(4_000, wiped.size)].astype(np.complex64, copy=False)
+    history.raw_preview = _as_numpy_complex64(preview_source, math, 4_000)
+    history.wiped_preview = _as_numpy_complex64(wiped, math, 4_000)
+    history.despread_preview = _as_numpy_complex64(wiped * prompt_code, math, 4_000)
 
 
 def _detect_lock(history: _TrackingHistory, valid: int) -> bool:
@@ -317,26 +481,23 @@ def _build_tracking_state(
     )
 
 
-def _track_blocks(
-    blocks: Iterable[np.ndarray],
+def _run_tracking_loop(
+    blocks: Iterable[Any],
     session: SessionConfig,
     acquisition: AcquisitionResult,
     max_ms: int,
+    samples_per_ms: int,
+    search_center_hz: float,
+    math: _TrackingMath,
     raw_preview_source: np.ndarray | None = None,
     progress_callback=None,
     log_callback=None,
 ) -> TrackingState:
-    """Track one PRN using a sequence of 1 ms blocks."""
+    """Run the serial 1 ms tracking loop with CPU or GPU vector math."""
 
-    samples_per_ms, search_center_hz = _validate_tracking_inputs(
-        session,
-        acquisition,
-        max_ms,
-    )
     loop = _initial_tracking_loop(session, acquisition)
     history = _empty_tracking_history(max_ms)
     valid_count = 0
-    block_time = np.arange(samples_per_ms, dtype=np.float64) / session.sample_rate
 
     for ms_index, block in enumerate(blocks):
         if ms_index >= max_ms:
@@ -344,16 +505,30 @@ def _track_blocks(
         if block.size < samples_per_ms:
             break
 
-        wiped = _wipe_carrier(block, loop, block_time)
-        correlators = _correlate_prompt_early_late(
-            wiped,
-            acquisition.prn,
-            session.sample_rate,
+        correlators, wiped = _correlate_block(
+            block,
+            session,
             samples_per_ms,
             loop,
-            float(session.early_late_spacing_chips),
+            math,
         )
         dll_disc, pll_disc = _loop_discriminators(correlators)
+
+        if ms_index == 0:
+            if wiped is None:
+                wiped = _wipe_carrier(block, loop, math)
+            prompt_code = correlators.prompt_code
+            if prompt_code is None:
+                prompt_code = _sample_ca_code_for_loop(math, loop, session.sample_rate)
+            _store_iq_previews(
+                history,
+                raw_preview_source,
+                block,
+                wiped,
+                prompt_code,
+                math,
+            )
+
         _advance_tracking_loop(
             loop,
             correlators.prompt,
@@ -371,15 +546,6 @@ def _track_blocks(
             loop,
             search_center_hz,
         )
-
-        if ms_index == 0:
-            _store_iq_previews(
-                history,
-                raw_preview_source,
-                block,
-                wiped,
-                correlators.prompt_code,
-            )
 
         if progress_callback:
             progress_callback(int(100 * (ms_index + 1) / max_ms))
@@ -401,6 +567,123 @@ def _track_blocks(
     return _build_tracking_state(acquisition, history, valid, lock_detected)
 
 
+def _log_tracking_backend(plan, log_callback=None) -> None:
+    """Log the selected tracking compute backend."""
+
+    if not log_callback:
+        return
+    gpu_text = plan.gpu_name if plan.gpu_available else "unavailable"
+    log_callback(
+        f"Tracking runtime: backend {plan.active_backend}, "
+        f"workers {plan.selected_workers}/{plan.logical_cores}, GPU {gpu_text}."
+    )
+
+
+def _log_tracking_fallback(exc: Exception, log_callback=None) -> None:
+    """Log one compact GPU-to-CPU fallback reason."""
+
+    if not log_callback:
+        return
+    reason = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+    log_callback(f"GPU tracking path failed; falling back to CPU. Reason: {reason}.")
+
+
+def _iter_sample_blocks(
+    samples: Any,
+    sample_rate: float,
+    samples_per_ms: int,
+    max_ms: int,
+) -> Iterable[Any]:
+    """Yield exact 1 ms blocks from an in-memory CPU or GPU sample array."""
+
+    for ms_index in range(max_ms):
+        start = _sample_index_for_ms(ms_index, sample_rate)
+        stop = start + samples_per_ms
+        if stop > samples.size:
+            break
+        yield samples[start:stop]
+
+
+def _track_sample_array_with_backend(
+    samples: np.ndarray,
+    session: SessionConfig,
+    acquisition: AcquisitionResult,
+    max_ms: int,
+    backend: str,
+    progress_callback=None,
+    log_callback=None,
+) -> TrackingState:
+    """Track an in-memory sample array with one selected backend."""
+
+    samples_per_ms, search_center_hz = _validate_tracking_inputs(
+        session,
+        acquisition,
+        max_ms,
+    )
+    math = _tracking_math_for_backend(backend, acquisition.prn, session.sample_rate, samples_per_ms)
+    backend_samples = (
+        math.cupy.asarray(samples)
+        if math.backend == "gpu" and math.cupy is not None
+        else samples
+    )
+    blocks = _iter_sample_blocks(backend_samples, session.sample_rate, samples_per_ms, max_ms)
+    return _run_tracking_loop(
+        blocks,
+        session,
+        acquisition,
+        max_ms=max_ms,
+        samples_per_ms=samples_per_ms,
+        search_center_hz=search_center_hz,
+        math=math,
+        raw_preview_source=samples,
+        progress_callback=progress_callback,
+        log_callback=log_callback,
+    )
+
+
+def _track_stream_with_backend(
+    source: Complex64FileSource,
+    start_sample: int,
+    raw_preview: np.ndarray,
+    session: SessionConfig,
+    acquisition: AcquisitionResult,
+    max_ms: int,
+    backend: str,
+    progress_callback=None,
+    log_callback=None,
+) -> TrackingState:
+    """Track a file stream with one selected backend."""
+
+    samples_per_ms, search_center_hz = _validate_tracking_inputs(
+        session,
+        acquisition,
+        max_ms,
+    )
+    math = _tracking_math_for_backend(backend, acquisition.prn, session.sample_rate, samples_per_ms)
+
+    def iter_blocks() -> Iterable[Any]:
+        for ms_index in range(max_ms):
+            block_start = int(start_sample) + _sample_index_for_ms(ms_index, session.sample_rate)
+            block = source.read_window(block_start, samples_per_ms)
+            if math.backend == "gpu" and math.cupy is not None:
+                yield math.cupy.asarray(block)
+            else:
+                yield block
+
+    return _run_tracking_loop(
+        iter_blocks(),
+        session,
+        acquisition,
+        max_ms=max_ms,
+        samples_per_ms=samples_per_ms,
+        search_center_hz=search_center_hz,
+        math=math,
+        raw_preview_source=raw_preview,
+        progress_callback=progress_callback,
+        log_callback=log_callback,
+    )
+
+
 def track_signal(
     samples: np.ndarray,
     session: SessionConfig,
@@ -413,20 +696,37 @@ def track_signal(
     if samples.size == 0:
         raise ValueError("No samples available for tracking.")
 
-    samples_per_ms = int(round(session.sample_rate * 1e-3))
     available_ms = int(np.floor(samples.size / max(session.sample_rate * 1e-3, 1e-9)))
     max_ms = min(int(session.tracking_ms), available_ms)
-    blocks = (
-        samples[start : start + samples_per_ms]
-        for start in (_sample_index_for_ms(ms_index, session.sample_rate) for ms_index in range(max_ms))
-        if start + samples_per_ms <= samples.size
+    plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        max_tasks=max_ms,
+        prefer_gpu=True,
     )
-    return _track_blocks(
-        blocks,
+    _log_tracking_backend(plan, log_callback)
+
+    if plan.active_backend == "gpu":
+        try:
+            return _track_sample_array_with_backend(
+                samples,
+                session,
+                acquisition,
+                max_ms,
+                backend="gpu",
+                progress_callback=progress_callback,
+                log_callback=log_callback,
+            )
+        except Exception as exc:
+            _log_tracking_fallback(exc, log_callback)
+
+    return _track_sample_array_with_backend(
+        samples,
         session,
         acquisition,
         max_ms=max_ms,
-        raw_preview_source=samples,
+        backend="cpu",
         progress_callback=progress_callback,
         log_callback=log_callback,
     )
@@ -444,21 +744,47 @@ def track_file(
 
     source = Complex64FileSource(file_path)
     samples_per_ms = int(round(session.sample_rate * 1e-3))
-    available_ms = int(np.floor(max(0, source.total_samples - int(start_sample)) / max(session.sample_rate * 1e-3, 1e-9)))
+    available_ms = int(
+        np.floor(
+            max(0, source.total_samples - int(start_sample))
+            / max(session.sample_rate * 1e-3, 1e-9)
+        )
+    )
     max_ms = min(int(session.tracking_ms), int(available_ms))
     raw_preview = source.read_window(start_sample, min(4_000, samples_per_ms))
+    plan = resolve_compute_plan(
+        session.compute_backend,
+        session.max_workers,
+        gpu_enabled=session.gpu_enabled,
+        max_tasks=max_ms,
+        prefer_gpu=True,
+    )
+    _log_tracking_backend(plan, log_callback)
 
-    def iter_ms_blocks():
-        for ms_index in range(max_ms):
-            block_start = int(start_sample) + _sample_index_for_ms(ms_index, session.sample_rate)
-            yield source.read_window(block_start, samples_per_ms)
+    if plan.active_backend == "gpu":
+        try:
+            return _track_stream_with_backend(
+                source,
+                start_sample,
+                raw_preview,
+                session,
+                acquisition,
+                max_ms,
+                backend="gpu",
+                progress_callback=progress_callback,
+                log_callback=log_callback,
+            )
+        except Exception as exc:
+            _log_tracking_fallback(exc, log_callback)
 
-    return _track_blocks(
-        iter_ms_blocks(),
+    return _track_stream_with_backend(
+        source,
+        start_sample,
+        raw_preview,
         session,
         acquisition,
         max_ms=max_ms,
-        raw_preview_source=raw_preview,
+        backend="cpu",
         progress_callback=progress_callback,
         log_callback=log_callback,
     )
