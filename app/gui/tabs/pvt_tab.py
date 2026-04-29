@@ -105,9 +105,19 @@ class PVTTab(QtWidgets.QWidget):
         self._configure_table(self.ephemeris_table)
         self.result_tabs.addTab(self.ephemeris_table, "Ephemerides")
 
-        self.observation_table = QtWidgets.QTableWidget(0, 8)
+        self.observation_table = QtWidgets.QTableWidget(0, 9)
         self.observation_table.setHorizontalHeaderLabels(
-            ["PRN", "SF", "TX TOW [s]", "RX file [s]", "Pseudorange [km]", "Sat clock [us]", "Start bit", "Bit ms"]
+            [
+                "PRN",
+                "SF",
+                "TX TOW [s]",
+                "RX file [s]",
+                "Pseudorange [km]",
+                "Sat clock [us]",
+                "Code phase [chips]",
+                "Start bit",
+                "Bit ms",
+            ]
         )
         self._configure_table(self.observation_table)
         self.result_tabs.addTab(self.observation_table, "Pseudoranges")
@@ -187,7 +197,7 @@ class PVTTab(QtWidgets.QWidget):
             f"GPS week/TOW: {result.gps_week}, {result.gps_time_of_week_s:.3f} s"
             if result.gps_week is not None and result.gps_time_of_week_s is not None
             else "GPS week/TOW: n/a",
-            f"UTC estimate: {result.utc_datetime.isoformat()}" if result.utc_datetime else "UTC estimate: n/a",
+            f"UTC solution epoch: {result.utc_datetime.isoformat()}" if result.utc_datetime else "UTC solution epoch: n/a",
         ]
         self.solution_text.setPlainText("\n".join(line for line in lines if line))
         self.evidence_text.setPlainText("\n".join(evidence))
@@ -222,6 +232,7 @@ class PVTTab(QtWidgets.QWidget):
                 f"{observation.receive_file_time_s:.6f}",
                 f"{observation.pseudorange_m / 1_000.0:.3f}",
                 f"{observation.satellite_clock_correction_s * 1e6:.3f}",
+                f"{observation.code_phase_chips:.2f}",
                 str(observation.subframe_start_bit),
                 str(observation.bit_start_ms),
             ]

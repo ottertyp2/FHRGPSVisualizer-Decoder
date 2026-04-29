@@ -15,6 +15,7 @@ from app.dsp.ephemeris import (
     satellite_clock_correction_s,
     satellite_position_ecef_m,
 )
+from app.dsp.gps_ca import CA_CODE_RATE_HZ
 from app.models import BitDecisionResult, NavigationDecodeResult, NavigationSubframe, TrackingState
 
 SPEED_OF_LIGHT_M_S = 299_792_458.0
@@ -54,6 +55,8 @@ class PseudorangeObservation:
     subframe_id: int
     subframe_start_bit: int
     bit_start_ms: int
+    code_phase_chips: float
+    code_phase_offset_us: float
 
 
 @dataclass(slots=True)
@@ -69,6 +72,34 @@ class PVTComputationResult:
     receiver_time_offset_s: float | None
     residual_rms_m: float | None
     summary_lines: list[str]
+
+
+@dataclass(slots=True)
+class _SubframeTiming:
+    """Receive-time evidence for one decoded subframe."""
+
+    receive_file_time_s: float
+    bit_start_ms: int
+    code_phase_chips: float
+    code_phase_s: float
+
+
+@dataclass(slots=True)
+class _SubframeArrival:
+    """One decoded subframe tied to the file time where it arrived."""
+
+    prn: int
+    subframe: NavigationSubframe
+    timing: _SubframeTiming
+
+
+@dataclass(slots=True)
+class _ClockCorrectedArrival:
+    """Arrival after applying the broadcast satellite clock correction."""
+
+    arrival: _SubframeArrival
+    corrected_transmit_time_s: float
+    satellite_clock_correction_s: float
 
 
 def lla_to_ecef(latitude_deg: float, longitude_deg: float, altitude_m: float) -> np.ndarray:
@@ -194,14 +225,35 @@ def _subframe_receive_time_s(
     tracking: TrackingState,
     bit_result: BitDecisionResult,
     subframe: NavigationSubframe,
-) -> tuple[float, int] | None:
+) -> _SubframeTiming | None:
     if subframe.start_bit < 0 or subframe.start_bit >= bit_result.bit_start_ms.size:
         return None
     bit_start_ms = int(bit_result.bit_start_ms[subframe.start_bit])
-    code_phase_s = 0.0
+    code_phase_s, code_phase_chips = _tracked_code_phase(tracking, bit_start_ms)
+    receive_time_s = _tracking_start_file_time_s(tracking) + bit_start_ms * 1e-3 - code_phase_s
+    return _SubframeTiming(
+        receive_file_time_s=receive_time_s,
+        bit_start_ms=bit_start_ms,
+        code_phase_chips=code_phase_chips,
+        code_phase_s=code_phase_s,
+    )
+
+
+def _tracked_code_phase(tracking: TrackingState, ms_index: int) -> tuple[float, float]:
+    """Return the tracked code-epoch offset at one prompt integration."""
+
+    phases = tracking.loop_states.get("code_phase_chips")
+    freqs = tracking.loop_states.get("prompt_code_freq_hz")
+    if phases is not None and int(ms_index) < len(phases):
+        phase_chips = float(phases[int(ms_index)])
+        code_freq_hz = CA_CODE_RATE_HZ
+        if freqs is not None and int(ms_index) < len(freqs) and float(freqs[int(ms_index)]) > 0.0:
+            code_freq_hz = float(freqs[int(ms_index)])
+        return phase_chips / code_freq_hz, phase_chips
     if tracking.sample_rate_hz > 0.0:
         code_phase_s = float(tracking.code_phase_samples) / float(tracking.sample_rate_hz)
-    return _tracking_start_file_time_s(tracking) + bit_start_ms * 1e-3 - code_phase_s, bit_start_ms
+        return code_phase_s, code_phase_s * CA_CODE_RATE_HZ
+    return 0.0, 0.0
 
 
 def _candidate_observation_groups(
@@ -209,10 +261,10 @@ def _candidate_observation_groups(
     bit_results_by_prn: dict[int, BitDecisionResult],
     nav_results_by_prn: dict[int, NavigationDecodeResult],
     ephemerides: dict[int, GpsEphemeris],
-) -> dict[float, list[tuple[int, NavigationSubframe, float, int]]]:
+) -> dict[float, list[_SubframeArrival]]:
     """Group valid subframe arrivals by their GPS transmit epoch."""
 
-    groups: dict[float, list[tuple[int, NavigationSubframe, float, int]]] = {}
+    groups: dict[float, list[_SubframeArrival]] = {}
     for prn, ephemeris in ephemerides.items():
         tracking = tracking_by_prn.get(prn)
         bit_result = bit_results_by_prn.get(prn)
@@ -225,52 +277,70 @@ def _candidate_observation_groups(
             timing = _subframe_receive_time_s(tracking, bit_result, subframe)
             if timing is None:
                 continue
-            receive_file_time_s, bit_start_ms = timing
             transmit_time_s = float((int(subframe.tow_seconds) - 6) % int(GPS_WEEK_SECONDS))
-            groups.setdefault(transmit_time_s, []).append((prn, subframe, receive_file_time_s, bit_start_ms))
+            groups.setdefault(transmit_time_s, []).append(_SubframeArrival(prn, subframe, timing))
     return groups
 
 
 def _build_observations_for_group(
-    group: list[tuple[int, NavigationSubframe, float, int]],
+    group: list[_SubframeArrival],
     ephemerides: dict[int, GpsEphemeris],
     target_range_s: float = 0.075,
 ) -> list[PseudorangeObservation]:
     """Turn one equal-TOW group into pseudoranges and satellite positions."""
 
-    raw_rows: list[tuple[int, NavigationSubframe, float, int, float, float]] = []
-    for prn, subframe, receive_file_time_s, bit_start_ms in group:
-        ephemeris = ephemerides[prn]
+    raw_rows: list[_ClockCorrectedArrival] = []
+    for arrival in group:
+        ephemeris = ephemerides[arrival.prn]
+        subframe = arrival.subframe
         transmit_time_s = float((int(subframe.tow_seconds or 0) - 6) % int(GPS_WEEK_SECONDS))
         clock_s = satellite_clock_correction_s(ephemeris, transmit_time_s)
         corrected_transmit_s = transmit_time_s - clock_s
-        raw_rows.append((prn, subframe, receive_file_time_s, bit_start_ms, corrected_transmit_s, clock_s))
+        raw_rows.append(
+            _ClockCorrectedArrival(
+                arrival=arrival,
+                corrected_transmit_time_s=corrected_transmit_s,
+                satellite_clock_correction_s=clock_s,
+            )
+        )
 
     if len(raw_rows) < 4:
         return []
 
     receiver_time_offset_s = (
-        float(np.median([corrected_tx_s - receive_s for _prn, _sf, receive_s, _ms, corrected_tx_s, _clock in raw_rows]))
+        float(
+            np.median(
+                [
+                    row.corrected_transmit_time_s - row.arrival.timing.receive_file_time_s
+                    for row in raw_rows
+                ]
+            )
+        )
         + float(target_range_s)
     )
     observations: list[PseudorangeObservation] = []
-    for prn, subframe, receive_file_time_s, bit_start_ms, corrected_transmit_s, clock_s in raw_rows:
-        pseudorange_m = SPEED_OF_LIGHT_M_S * (receive_file_time_s + receiver_time_offset_s - corrected_transmit_s)
-        transmit_for_orbit_s = corrected_transmit_s
-        satellite_position = satellite_position_ecef_m(ephemerides[prn], transmit_for_orbit_s)
+    for row in raw_rows:
+        arrival = row.arrival
+        timing = arrival.timing
+        pseudorange_m = SPEED_OF_LIGHT_M_S * (
+            timing.receive_file_time_s + receiver_time_offset_s - row.corrected_transmit_time_s
+        )
+        satellite_position = satellite_position_ecef_m(ephemerides[arrival.prn], row.corrected_transmit_time_s)
         satellite_position = rotate_ecef_for_transit(satellite_position, pseudorange_m / SPEED_OF_LIGHT_M_S)
         observations.append(
             PseudorangeObservation(
-                prn=prn,
-                transmit_time_s=float((int(subframe.tow_seconds or 0) - 6) % int(GPS_WEEK_SECONDS)),
-                corrected_transmit_time_s=float(corrected_transmit_s),
-                receive_file_time_s=float(receive_file_time_s),
+                prn=arrival.prn,
+                transmit_time_s=float((int(arrival.subframe.tow_seconds or 0) - 6) % int(GPS_WEEK_SECONDS)),
+                corrected_transmit_time_s=float(row.corrected_transmit_time_s),
+                receive_file_time_s=float(timing.receive_file_time_s),
                 pseudorange_m=float(pseudorange_m),
-                satellite_clock_correction_s=float(clock_s),
+                satellite_clock_correction_s=float(row.satellite_clock_correction_s),
                 satellite_position_m=satellite_position,
-                subframe_id=int(subframe.subframe_id or 0),
-                subframe_start_bit=int(subframe.start_bit),
-                bit_start_ms=int(bit_start_ms),
+                subframe_id=int(arrival.subframe.subframe_id or 0),
+                subframe_start_bit=int(arrival.subframe.start_bit),
+                bit_start_ms=int(timing.bit_start_ms),
+                code_phase_chips=float(timing.code_phase_chips),
+                code_phase_offset_us=float(timing.code_phase_s * 1e6),
             )
         )
     return observations
@@ -359,16 +429,16 @@ def compute_pvt_from_navigation(
     best_score = np.inf
 
     for transmit_time_s, group in ranked_groups:
-        unique_prns = sorted({prn for prn, _sf, _rx, _ms in group})
+        unique_prns = sorted({arrival.prn for arrival in group})
         if len(unique_prns) < 4:
             continue
         unique_group = []
         seen: set[int] = set()
-        for row in group:
-            if row[0] in seen:
+        for arrival in group:
+            if arrival.prn in seen:
                 continue
-            seen.add(row[0])
-            unique_group.append(row)
+            seen.add(arrival.prn)
+            unique_group.append(arrival)
         observations = _build_observations_for_group(unique_group, ephemerides)
         if len(observations) < 4:
             continue

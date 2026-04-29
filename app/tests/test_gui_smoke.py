@@ -98,6 +98,7 @@ def test_main_window_smoke() -> None:
     assert window.navigation_tab.navigation_tabs.tabText(4) == "Almanac / Ephemeris"
     assert window.tabs.tabText(9) == "PVT / Time"
     assert window.pvt_tab.result_tabs.tabText(0) == "Solution"
+    assert window.pvt_tab.observation_table.columnCount() == 9
     assert window.pvt_tab.task_status_label.text() == "PVT idle."
     assert window.raw_tab.i_plot.minimumHeight() >= 260
     assert window.navigation_tab.bit_source_mode() == "auto"

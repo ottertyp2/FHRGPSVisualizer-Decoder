@@ -76,6 +76,8 @@ class _TrackingHistory:
     carrier_error: np.ndarray
     doppler_est: np.ndarray
     code_freq_est: np.ndarray
+    code_phase_chips: np.ndarray
+    prompt_code_freq: np.ndarray
     lock_metric: np.ndarray
     prompt_history: np.ndarray
     raw_preview: np.ndarray
@@ -155,6 +157,8 @@ def _empty_tracking_history(max_ms: int) -> _TrackingHistory:
         carrier_error=np.zeros(max_ms, dtype=np.float32),
         doppler_est=np.zeros(max_ms, dtype=np.float32),
         code_freq_est=np.zeros(max_ms, dtype=np.float32),
+        code_phase_chips=np.zeros(max_ms, dtype=np.float32),
+        prompt_code_freq=np.zeros(max_ms, dtype=np.float32),
         lock_metric=np.zeros(max_ms, dtype=np.float32),
         prompt_history=np.zeros(max_ms, dtype=np.complex64),
         raw_preview=np.empty(0, dtype=np.complex64),
@@ -402,6 +406,8 @@ def _store_tracking_outputs(
     pll_disc: float,
     loop: _TrackingLoop,
     search_center_hz: float,
+    prompt_code_phase_chips: float,
+    prompt_code_freq_hz: float,
 ) -> None:
     """Store one millisecond of loop outputs."""
 
@@ -415,6 +421,8 @@ def _store_tracking_outputs(
     history.carrier_error[ms_index] = float(pll_disc)
     history.doppler_est[ms_index] = float(loop.carrier_freq_hz - search_center_hz)
     history.code_freq_est[ms_index] = float(loop.code_freq_hz)
+    history.code_phase_chips[ms_index] = float(prompt_code_phase_chips)
+    history.prompt_code_freq[ms_index] = float(prompt_code_freq_hz)
     history.lock_metric[ms_index] = float(np.abs(prompt.real) / (np.abs(prompt.imag) + 1e-6))
     history.prompt_history[ms_index] = np.complex64(prompt)
 
@@ -482,6 +490,8 @@ def _build_tracking_state(
         loop_states={
             "pll_disc_rad": history.carrier_error[:valid],
             "dll_disc": history.code_error[:valid],
+            "code_phase_chips": history.code_phase_chips[:valid],
+            "prompt_code_freq_hz": history.prompt_code_freq[:valid],
         },
         source_start_sample=int(source_start_sample),
         sample_rate_hz=float(session.sample_rate),
@@ -538,6 +548,8 @@ def _run_tracking_loop(
                 math,
             )
 
+        prompt_code_phase_chips = float(loop.code_phase_chips)
+        prompt_code_freq_hz = float(loop.code_freq_hz)
         _advance_tracking_loop(
             loop,
             correlators.prompt,
@@ -554,6 +566,8 @@ def _run_tracking_loop(
             pll_disc,
             loop,
             search_center_hz,
+            prompt_code_phase_chips,
+            prompt_code_freq_hz,
         )
 
         if progress_callback:

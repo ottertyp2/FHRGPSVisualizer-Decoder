@@ -6,7 +6,14 @@ from datetime import UTC, datetime
 
 import numpy as np
 
-from app.dsp.pvt import expand_gps_week, gps_utc_datetime, lla_to_ecef, solve_position_from_pseudoranges
+from app.dsp.pvt import (
+    _subframe_receive_time_s,
+    expand_gps_week,
+    gps_utc_datetime,
+    lla_to_ecef,
+    solve_position_from_pseudoranges,
+)
+from app.models import BitDecisionResult, NavigationSubframe, TrackingState
 
 
 def test_position_solver_recovers_known_receiver() -> None:
@@ -62,3 +69,51 @@ def test_gps_week_expansion_and_utc_conversion() -> None:
 
     assert full_week == 2415
     assert gps_utc_datetime(full_week, 312_222.0).isoformat() == "2026-04-22T14:43:24+00:00"
+
+
+def test_subframe_receive_time_uses_tracked_code_phase() -> None:
+    tracking = TrackingState(
+        prn=1,
+        times_s=np.arange(3, dtype=np.float32) * 1e-3,
+        prompt_i=np.ones(3, dtype=np.float32),
+        prompt_q=np.zeros(3, dtype=np.float32),
+        early_mag=np.ones(3, dtype=np.float32),
+        prompt_mag=np.ones(3, dtype=np.float32),
+        late_mag=np.ones(3, dtype=np.float32),
+        code_error=np.zeros(3, dtype=np.float32),
+        carrier_error=np.zeros(3, dtype=np.float32),
+        doppler_est_hz=np.zeros(3, dtype=np.float32),
+        code_freq_est_hz=np.ones(3, dtype=np.float32) * 1_023_000.0,
+        lock_metric=np.ones(3, dtype=np.float32),
+        lock_detected=True,
+        loop_states={
+            "code_phase_chips": np.asarray([0.0, 200.0, 400.0], dtype=np.float32),
+            "prompt_code_freq_hz": np.asarray([1_000_000.0, 1_000_000.0, 1_000_000.0], dtype=np.float32),
+        },
+        source_start_sample=1_000_000,
+        sample_rate_hz=1_000_000.0,
+        code_phase_samples=100,
+    )
+    bit_result = BitDecisionResult(
+        prompt_ms=np.zeros(3, dtype=np.float32),
+        best_offset_ms=0,
+        bit_sums=np.ones(3, dtype=np.float32),
+        bit_values=np.ones(3, dtype=np.int8),
+        confidences=np.ones(3, dtype=np.float32),
+        bit_start_ms=np.asarray([0, 1, 2], dtype=np.int32),
+    )
+    subframe = NavigationSubframe(
+        start_bit=2,
+        subframe_id=1,
+        tow_seconds=10,
+        words=[],
+        fields=[],
+    )
+
+    timing = _subframe_receive_time_s(tracking, bit_result, subframe)
+
+    assert timing is not None
+    assert timing.bit_start_ms == 2
+    assert timing.code_phase_chips == 400.0
+    np.testing.assert_allclose(timing.code_phase_s, 0.0004)
+    np.testing.assert_allclose(timing.receive_file_time_s, 1.0016)
