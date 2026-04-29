@@ -51,7 +51,9 @@ Supported well today:
 - 1 ms prompt integrations and 20 ms bit decisions
 - selectable bit source for navigation decoding: auto, carrier-aligned prompt, prompt I, or prompt Q
 - LNAV preamble detection, word sync, and parity checks
-- WGS-84 ECEF/LLA conversion and least-squares position solving from four or more pseudoranges
+- LNAV subframe 1/2/3 ephemeris decoding for PVT
+- WGS-84 ECEF/LLA conversion and least-squares position solving from four or more decoded PRNs
+- an educational `PVT / Time` tab that can run a bounded auto pipeline on large captures
 - benchmark of file I/O, FFT, acquisition, and tracking throughput
 
 Out of scope for now:
@@ -153,7 +155,8 @@ The sample-rate field is freely editable, so you can enter exact recorder values
 7. If the capture is uncertain, use `Auto Detect Capture` or `Sweep Search Center`.
 8. Track the highlighted PRN once acquisition shows a repeated candidate; use the loop controls when you want to experiment with DLL/PLL behavior.
 9. Decode bits and inspect LNAV framing in `Bits / Navigation`; switch bit source if the prompt phase looks rotated.
-10. Run `Benchmark` if you want a quick laptop suitability estimate for larger files.
+10. Use `PVT / Time` once at least four PRNs have decoded ephemerides, or run its Auto PVT pipeline on a bounded capture window.
+11. Run `Benchmark` if you want a quick laptop suitability estimate for larger files.
 
 ## Learning / Concept Lab
 
@@ -233,9 +236,17 @@ This view stays PRN-specific and shows:
 - LNAV preamble detections
 - word labels, parity results, and bit/hex summaries
 
-### PVT Core
+### PVT / Time
 
-The DSP layer includes a tested least-squares WGS-84 solver for four or more satellite pseudoranges. A real position fix should only be trusted after the navigation path has enough parity-valid ephemeris and timing evidence for the selected PRNs.
+This tab joins multiple decoded PRNs into one receiver time and position estimate:
+
+- decodes broadcast ephemerides from parity-valid LNAV subframes 1, 2, and 3
+- derives subframe receive times from tracking sample offsets, bit timing, and C/A code phase
+- applies satellite clock correction and Earth-rotation transit correction
+- solves WGS-84 position with a small transparent outlier check
+- shows the GPS week/TOW, UTC estimate, ephemeris rows, pseudorange rows, and a Wachtberg validation distance
+
+For `testv4_10min.bin`, use the default `200e6/33` sample-rate hypothesis. A practical Auto PVT starting point is a window near 60 seconds, about 3 seconds of acquisition data, and 45-60 seconds of tracking. The Wachtberg reference is used only as a validation readout after the solve, not as an input to the least-squares position.
 
 ### Benchmark
 
@@ -256,6 +267,7 @@ The app is designed to stay usable on large recordings.
 - Preview and plotting operate on bounded windows.
 - Acquisition loads only the short segment it needs unless the chosen mode requires more.
 - Tracking can work from streamed or bounded source data rather than requiring the entire file to be resident.
+- The PVT auto pipeline reads only its short acquisition window and then streams each selected PRN for tracking.
 - Full-file RAM preload is optional and clearly exposed in the GUI.
 - Large RAM loads show warnings and a progress dialog with cancel support.
 

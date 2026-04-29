@@ -27,6 +27,10 @@ from app.dsp.io import (
     load_complex64_samples_with_progress,
 )
 from app.dsp.navdecode import decode_navigation_from_tracking
+from app.dsp.pvt import PVTComputationResult
+from app.dsp.pvt import compute_pvt_from_navigation
+from app.dsp.pvt_pipeline import PVTPipelineResult
+from app.dsp.pvt_pipeline import run_pvt_pipeline
 from app.dsp.tracking import track_file
 from app.dsp.tracking import track_signal
 from app.gui.tabs.acquisition_tab import AcquisitionTab
@@ -35,6 +39,7 @@ from app.gui.tabs.concept_lab_tab import ConceptLabTab
 from app.gui.tabs.iq_tab import IQPlaneTab
 from app.gui.tabs.learning_tab import LearningTab
 from app.gui.tabs.navigation_tab import NavigationTab
+from app.gui.tabs.pvt_tab import PVTTab
 from app.gui.tabs.raw_signal_tab import RawSignalTab
 from app.gui.tabs.session_tab import SessionTab
 from app.gui.tabs.spectrum_tab import SpectrumTab
@@ -73,6 +78,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tracking_state: TrackingState | None = None
         self.bit_result: BitDecisionResult | None = None
         self.nav_result: NavigationDecodeResult | None = None
+        self.pvt_result: PVTComputationResult | None = None
         self.acquisition_results_by_prn: dict[int, AcquisitionResult] = {}
         self.acquisition_context_by_prn: dict[int, tuple[str | None, int, int, float, float]] = {}
         self.tracking_results_by_prn: dict[int, TrackingState] = {}
@@ -93,6 +99,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.acquisition_tab = AcquisitionTab()
         self.tracking_tab = TrackingTab()
         self.navigation_tab = NavigationTab()
+        self.pvt_tab = PVTTab()
         self.benchmark_tab = BenchmarkTab()
 
         self.tabs.addTab(self.session_tab, "File / Session")
@@ -104,6 +111,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.acquisition_tab, "Acquisition")
         self.tabs.addTab(self.tracking_tab, "Tracking")
         self.tabs.addTab(self.navigation_tab, "Bits / Navigation")
+        self.tabs.addTab(self.pvt_tab, "PVT / Time")
         self.tabs.addTab(self.benchmark_tab, "Benchmark")
         self.setCentralWidget(self.tabs)
 
@@ -117,6 +125,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tracking_state = None
         self.bit_result = None
         self.nav_result = None
+        self.pvt_result = None
         self.acquisition_results_by_prn.clear()
         self.acquisition_context_by_prn.clear()
         self.tracking_results_by_prn.clear()
@@ -148,6 +157,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.navigation_tab.word_table.setRowCount(0)
         self.navigation_tab.set_task_message("Navigation decoder idle.")
         self.navigation_tab.set_task_progress(0)
+        self.pvt_tab.clear_result()
+        self.pvt_tab.set_task_message("PVT idle.")
+        self.pvt_tab.set_task_progress(0)
         self.learning_tab.update_pipeline(None, None, None, None, None)
 
     def _clear_loaded_samples(self) -> None:
@@ -180,6 +192,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tracking_tab.settings_changed.connect(self.update_ram_status)
         self.navigation_tab.decode_requested.connect(self.decode_navigation)
         self.navigation_tab.selection_changed.connect(self.set_selected_prn)
+        self.pvt_tab.solve_requested.connect(self.solve_pvt_from_decoded)
+        self.pvt_tab.pipeline_requested.connect(self.start_pvt_pipeline)
 
     def _load_default_file_if_present(self) -> None:
         default_file = Path.cwd() / "test3min.bin"
@@ -1038,7 +1052,13 @@ class MainWindow(QtWidgets.QMainWindow):
             samples = source_samples[start_offset:] if start_offset < source_samples.size else source_samples
             if samples.size == 0:
                 return
-            worker = Worker(track_signal, samples, self.session, acquisition)
+            worker = Worker(
+                track_signal,
+                samples,
+                self.session,
+                acquisition,
+                source_start_sample=int(self.session.start_sample) + start_offset,
+            )
         self._start_worker(
             worker,
             self._on_tracking_finished,
@@ -1116,6 +1136,98 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{len(nav_result.preamble_indices)} preambles, {nav_result.parity_ok_count} parity-valid words.",
         )
         self.tabs.setCurrentWidget(self.navigation_tab)
+
+    def solve_pvt_from_decoded(self) -> None:
+        """Solve receiver time/position from the currently decoded PRNs."""
+
+        if len(self.nav_results_by_prn) < 4:
+            self.pvt_tab.set_task_message("Decode at least four PRNs before solving PVT.")
+            self.pvt_tab.set_task_progress(0)
+            QtWidgets.QMessageBox.warning(self, "PVT", "Decode at least four PRNs before solving PVT.")
+            return
+        self.pvt_tab.set_task_message("Solving PVT from decoded PRNs.")
+        self.pvt_tab.set_task_progress(0)
+        worker = Worker(
+            compute_pvt_from_navigation,
+            self.tracking_results_by_prn,
+            self.bit_results_by_prn,
+            self.nav_results_by_prn,
+        )
+        self.tabs.setCurrentWidget(self.pvt_tab)
+        self._start_worker(
+            worker,
+            self._on_pvt_finished,
+            progress_handlers=[self.pvt_tab.set_task_progress],
+            log_handlers=[self.pvt_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.pvt_tab, "PVT solve failed. Check File / Session log.")],
+        )
+
+    def start_pvt_pipeline(self) -> None:
+        """Run acquisition, tracking, navigation decode, and PVT as one guided job."""
+
+        self.sync_session_from_ui()
+        if not self.session.file_path or self.session.file_path == "<demo>":
+            self.pvt_tab.set_task_message("Select a real IQ file before running Auto PVT.")
+            self.pvt_tab.set_task_progress(0)
+            QtWidgets.QMessageBox.warning(self, "PVT", "Select a real IQ file before running Auto PVT.")
+            return
+        if self.file_metadata is None or self.file_metadata.file_path != self.session.file_path:
+            self.inspect_file(self.session.file_path)
+        settings = self.pvt_tab.pipeline_settings()
+        self.pvt_tab.set_task_message("Running Auto PVT pipeline.")
+        self.pvt_tab.set_task_progress(0)
+        worker = Worker(
+            run_pvt_pipeline,
+            self.session.file_path,
+            self.session,
+            **settings,
+        )
+        self.tabs.setCurrentWidget(self.pvt_tab)
+        self._start_worker(
+            worker,
+            self._on_pvt_pipeline_finished,
+            progress_handlers=[self.pvt_tab.set_task_progress],
+            log_handlers=[self.pvt_tab.set_task_message],
+            error_handlers=[lambda _trace: self._set_tab_task_failed(self.pvt_tab, "Auto PVT failed. Check File / Session log.")],
+        )
+
+    def _on_pvt_finished(self, result: PVTComputationResult) -> None:
+        self.pvt_result = result
+        self.pvt_tab.update_result(result)
+        self.session_tab.set_progress(100)
+        if result.solution is None:
+            self.append_log("PVT solve finished without a position fix.")
+            self._set_tab_task_finished(self.pvt_tab, "PVT solve finished without a position fix.")
+        else:
+            self.append_log(
+                f"PVT solve finished: {result.solution.latitude_deg:.6f}, "
+                f"{result.solution.longitude_deg:.6f}."
+            )
+            self._set_tab_task_finished(self.pvt_tab, "PVT solve finished.")
+        self.tabs.setCurrentWidget(self.pvt_tab)
+
+    def _on_pvt_pipeline_finished(self, result: PVTPipelineResult) -> None:
+        self.acquisition_results_by_prn.update({item.prn: item for item in result.acquisition_results})
+        self.tracking_results_by_prn.update(result.tracking_results_by_prn)
+        self.bit_results_by_prn.update(result.bit_results_by_prn)
+        self.nav_results_by_prn.update(result.nav_results_by_prn)
+        if result.tracking_results_by_prn:
+            self.selected_prn = sorted(result.tracking_results_by_prn)[0]
+        self.pvt_result = result.pvt_result
+        self.pvt_tab.update_result(result.pvt_result)
+        self.refresh_satellite_views()
+        self.session_tab.set_progress(100)
+        if result.pvt_result.solution is None:
+            self.append_log("Auto PVT finished without a position fix.")
+            self._set_tab_task_finished(self.pvt_tab, "Auto PVT finished without a position fix.")
+        else:
+            solution = result.pvt_result.solution
+            self.append_log(
+                f"Auto PVT finished: {solution.latitude_deg:.6f}, {solution.longitude_deg:.6f}, "
+                f"UTC {result.pvt_result.utc_datetime.isoformat() if result.pvt_result.utc_datetime else 'n/a'}."
+            )
+            self._set_tab_task_finished(self.pvt_tab, "Auto PVT finished.")
+        self.tabs.setCurrentWidget(self.pvt_tab)
 
     def generate_demo(self) -> None:
         """Generate a synthetic GPS-like signal and refresh the preview."""

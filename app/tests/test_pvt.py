@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import numpy as np
 
-from app.dsp.pvt import lla_to_ecef, solve_position_from_pseudoranges
+from app.dsp.pvt import expand_gps_week, gps_utc_datetime, lla_to_ecef, solve_position_from_pseudoranges
 
 
 def test_position_solver_recovers_wachtberg_like_receiver() -> None:
@@ -53,3 +55,10 @@ def test_position_solver_requires_positive_iteration_count() -> None:
         assert "max_iterations" in str(exc)
     else:
         raise AssertionError("Expected a ValueError for max_iterations=0.")
+
+
+def test_gps_week_expansion_and_utc_conversion() -> None:
+    full_week = expand_gps_week(367, reference=datetime(2026, 4, 29, tzinfo=UTC))
+
+    assert full_week == 2415
+    assert gps_utc_datetime(full_week, 312_222.0).isoformat() == "2026-04-22T14:43:24+00:00"

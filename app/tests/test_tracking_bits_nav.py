@@ -19,6 +19,7 @@ from app.dsp.navdecode import (
     parse_how,
 )
 from app.dsp.tracking import track_signal
+from app.dsp.tracking import _CorrelatorOutput, _loop_discriminators
 from app.models import AcquisitionCandidate, AcquisitionResult, BitDecisionResult, SessionConfig
 
 
@@ -184,6 +185,16 @@ def test_tracking_and_nav_pipeline() -> None:
     assert bit_result.bit_values.size >= 5
     nav_result = decode_navigation_bits(bit_result)
     assert len(nav_result.summary_lines) >= 1
+
+
+def test_tracking_pll_discriminator_ignores_bpsk_data_sign() -> None:
+    positive = _CorrelatorOutput(prompt_code=None, early=1.0 + 0.0j, prompt=1.0 + 0.2j, late=1.0 + 0.0j)
+    negative = _CorrelatorOutput(prompt_code=None, early=1.0 + 0.0j, prompt=-1.0 - 0.2j, late=1.0 + 0.0j)
+
+    _dll_positive, pll_positive = _loop_discriminators(positive)
+    _dll_negative, pll_negative = _loop_discriminators(negative)
+
+    assert pll_positive == pytest.approx(pll_negative)
 
 
 def test_tracking_rejects_prn_mismatch_between_session_and_acquisition() -> None:

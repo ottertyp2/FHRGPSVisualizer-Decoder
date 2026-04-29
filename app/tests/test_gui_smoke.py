@@ -72,7 +72,7 @@ def _make_tracking_state(prn: int) -> TrackingState:
 def test_main_window_smoke() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow()
-    assert window.tabs.count() == 10
+    assert window.tabs.count() == 11
     assert window.tabs.tabText(1) == "Learning Flow"
     assert window.tabs.tabText(2) == "Signal Intuition"
     assert window.concept_lab_tab.current_result is not None
@@ -96,6 +96,9 @@ def test_main_window_smoke() -> None:
     assert window.navigation_tab.navigation_tabs.tabText(1) == "LNAV Words"
     assert window.navigation_tab.navigation_tabs.tabText(2) == "Subframes"
     assert window.navigation_tab.navigation_tabs.tabText(4) == "Almanac / Ephemeris"
+    assert window.tabs.tabText(9) == "PVT / Time"
+    assert window.pvt_tab.result_tabs.tabText(0) == "Solution"
+    assert window.pvt_tab.task_status_label.text() == "PVT idle."
     assert window.raw_tab.i_plot.minimumHeight() >= 260
     assert window.navigation_tab.bit_source_mode() == "auto"
     assert window.acquisition_tab.task_status_label.text() == "Acquisition idle."

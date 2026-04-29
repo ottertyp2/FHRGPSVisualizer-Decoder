@@ -360,7 +360,8 @@ def _loop_discriminators(output: _CorrelatorOutput) -> tuple[float, float]:
     early_abs = np.abs(output.early)
     late_abs = np.abs(output.late)
     dll_disc = (early_abs - late_abs) / (early_abs + late_abs + 1e-12)
-    pll_disc = np.arctan2(output.prompt.imag, np.abs(output.prompt.real) + 1e-12)
+    data_sign = 1.0 if output.prompt.real >= 0.0 else -1.0
+    pll_disc = np.arctan2(data_sign * output.prompt.imag, np.abs(output.prompt.real) + 1e-12)
     return float(dll_disc), float(pll_disc)
 
 
@@ -375,7 +376,9 @@ def _advance_tracking_loop(
     """Update carrier and code estimates after one millisecond."""
 
     if ms_index > 0:
-        phase_step = np.angle(prompt * np.conj(loop.previous_prompt))
+        # Squaring removes the 180 degree BPSK navigation-bit ambiguity before
+        # the early FLL estimates the residual carrier frequency.
+        phase_step = 0.5 * np.angle((prompt * prompt) * np.conj(loop.previous_prompt * loop.previous_prompt))
         freq_error_hz = phase_step / (2.0 * np.pi * 1e-3)
     else:
         freq_error_hz = 0.0
@@ -444,9 +447,11 @@ def _detect_lock(history: _TrackingHistory, valid: int) -> bool:
 
 def _build_tracking_state(
     acquisition: AcquisitionResult,
+    session: SessionConfig,
     history: _TrackingHistory,
     valid: int,
     lock_detected: bool,
+    source_start_sample: int = 0,
 ) -> TrackingState:
     """Trim preallocated arrays and build the public tracking model."""
 
@@ -478,6 +483,9 @@ def _build_tracking_state(
             "pll_disc_rad": history.carrier_error[:valid],
             "dll_disc": history.code_error[:valid],
         },
+        source_start_sample=int(source_start_sample),
+        sample_rate_hz=float(session.sample_rate),
+        code_phase_samples=int(acquisition.best_candidate.code_phase_samples),
     )
 
 
@@ -490,6 +498,7 @@ def _run_tracking_loop(
     search_center_hz: float,
     math: _TrackingMath,
     raw_preview_source: np.ndarray | None = None,
+    source_start_sample: int = 0,
     progress_callback=None,
     log_callback=None,
 ) -> TrackingState:
@@ -564,7 +573,14 @@ def _run_tracking_loop(
             f"(relative Doppler {history.doppler_est[valid - 1]:+.1f} Hz), {state}."
         )
 
-    return _build_tracking_state(acquisition, history, valid, lock_detected)
+    return _build_tracking_state(
+        acquisition,
+        session,
+        history,
+        valid,
+        lock_detected,
+        source_start_sample=source_start_sample,
+    )
 
 
 def _log_tracking_backend(plan, log_callback=None) -> None:
@@ -610,6 +626,7 @@ def _track_sample_array_with_backend(
     acquisition: AcquisitionResult,
     max_ms: int,
     backend: str,
+    source_start_sample: int = 0,
     progress_callback=None,
     log_callback=None,
 ) -> TrackingState:
@@ -636,6 +653,7 @@ def _track_sample_array_with_backend(
         search_center_hz=search_center_hz,
         math=math,
         raw_preview_source=samples,
+        source_start_sample=source_start_sample,
         progress_callback=progress_callback,
         log_callback=log_callback,
     )
@@ -679,6 +697,7 @@ def _track_stream_with_backend(
         search_center_hz=search_center_hz,
         math=math,
         raw_preview_source=raw_preview,
+        source_start_sample=int(start_sample),
         progress_callback=progress_callback,
         log_callback=log_callback,
     )
@@ -688,6 +707,7 @@ def track_signal(
     samples: np.ndarray,
     session: SessionConfig,
     acquisition: AcquisitionResult,
+    source_start_sample: int = 0,
     progress_callback=None,
     log_callback=None,
 ) -> TrackingState:
@@ -715,6 +735,7 @@ def track_signal(
                 acquisition,
                 max_ms,
                 backend="gpu",
+                source_start_sample=source_start_sample,
                 progress_callback=progress_callback,
                 log_callback=log_callback,
             )
@@ -727,6 +748,7 @@ def track_signal(
         acquisition,
         max_ms=max_ms,
         backend="cpu",
+        source_start_sample=source_start_sample,
         progress_callback=progress_callback,
         log_callback=log_callback,
     )

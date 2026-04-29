@@ -136,6 +136,9 @@ class TrackingState:
     lock_detected: bool
     iq_views: dict[str, np.ndarray] = field(default_factory=dict)
     loop_states: dict[str, np.ndarray] = field(default_factory=dict)
+    source_start_sample: int = 0
+    sample_rate_hz: float = 0.0
+    code_phase_samples: int = 0
 
 
 @dataclass(slots=True)

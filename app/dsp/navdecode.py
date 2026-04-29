@@ -271,7 +271,7 @@ def _decode_word_sequence(
     """Decode up to ten LNAV words from one preamble location."""
 
     words: list[NavigationWord] = []
-    previous_accepted_word: list[int] | None = None
+    previous_word = list(values[preamble_index - LNAV_WORD_BITS : preamble_index]) if preamble_index >= LNAV_WORD_BITS else None
 
     for word_offset in range(max_words):
         word_start = preamble_index + word_offset * LNAV_WORD_BITS
@@ -280,7 +280,7 @@ def _decode_word_sequence(
 
         raw_word = list(values[word_start : word_start + LNAV_WORD_BITS])
         word_confidences = _confidence_slice(confidences, word_start)
-        parity_unchecked = word_offset > 0 and previous_accepted_word is None
+        parity_unchecked = previous_word is None and word_offset > 0
         accepted_word = raw_word
         corrected = False
         corrected_bit_index = None
@@ -289,10 +289,10 @@ def _decode_word_sequence(
         if not parity_unchecked:
             accepted_word, corrected, corrected_bit_index = maybe_correct_word(
                 raw_word,
-                previous_accepted_word,
+                previous_word,
                 word_confidences,
             )
-            parity_ok = check_lnav_word(accepted_word, previous_accepted_word)
+            parity_ok = check_lnav_word(accepted_word, previous_word)
 
         word = NavigationWord(
             start_bit=word_start,
@@ -306,7 +306,7 @@ def _decode_word_sequence(
             confidence=_word_confidence(word_confidences),
         )
         words.append(word)
-        previous_accepted_word = accepted_word if parity_ok else None
+        previous_word = accepted_word if parity_ok else raw_word
 
     return words
 
