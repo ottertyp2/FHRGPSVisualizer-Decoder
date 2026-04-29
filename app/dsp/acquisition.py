@@ -52,6 +52,87 @@ class AcquisitionConfig:
     gpu_enabled: bool = True
 
 
+@dataclass(slots=True)
+class _AcquisitionPlan:
+    """Precomputed values shared by all searched segments."""
+
+    sample_rate: float
+    samples_per_ms: int
+    segment_starts_ms: np.ndarray
+    doppler_bins: np.ndarray
+    time_vector: np.ndarray
+    code_fft: np.ndarray
+
+
+@dataclass(slots=True)
+class _SegmentSearchResult:
+    """Best peak and heatmap for one acquisition segment."""
+
+    heatmap: np.ndarray
+    best_candidate: AcquisitionCandidate
+    usable_blocks: int
+    segment_start_ms: int
+
+
+def _validate_acquisition_inputs(samples: np.ndarray, config: AcquisitionConfig) -> tuple[int, int]:
+    """Validate acquisition inputs and return sample/block counts."""
+
+    if samples.size == 0:
+        raise ValueError("No samples available for acquisition.")
+
+    sample_rate = config.sample_rate
+    if not np.isfinite(sample_rate) or sample_rate <= 0:
+        raise ValueError("Sample rate must be positive for acquisition.")
+    if not np.isfinite(config.search_center_hz):
+        raise ValueError("Search center must be finite for acquisition.")
+    if not np.isfinite(config.doppler_min) or not np.isfinite(config.doppler_max):
+        raise ValueError("Doppler range must be finite for acquisition.")
+    if not np.isfinite(config.doppler_step) or config.doppler_step <= 0:
+        raise ValueError("Doppler step must be positive for acquisition.")
+    if config.doppler_min > config.doppler_max:
+        raise ValueError("Doppler minimum must not exceed Doppler maximum for acquisition.")
+
+    samples_per_ms = int(round(sample_rate * 1e-3))
+    if samples_per_ms <= 0:
+        raise ValueError("Sample rate is too low for 1 ms acquisition blocks.")
+
+    total_ms = int(np.floor(samples.size / max(sample_rate * 1e-3, 1e-9)))
+    if total_ms <= 0:
+        raise ValueError("Selected sample window is shorter than one 1 ms acquisition block.")
+    return samples_per_ms, total_ms
+
+
+def _prepare_acquisition(samples: np.ndarray, config: AcquisitionConfig) -> _AcquisitionPlan:
+    """Build the reusable vectors for one PRN acquisition run."""
+
+    samples_per_ms, total_ms = _validate_acquisition_inputs(samples, config)
+    segment_starts_ms = _select_segment_starts_ms(
+        total_ms,
+        config.integration_ms,
+        config.acquisition_segment_count,
+    )
+    if segment_starts_ms.size == 0:
+        raise ValueError("Not enough data for one 1 ms acquisition block.")
+
+    doppler_bins = np.arange(
+        config.doppler_min,
+        config.doppler_max + config.doppler_step,
+        config.doppler_step,
+    )
+    if doppler_bins.size == 0:
+        raise ValueError("Doppler search produced no bins.")
+
+    local_code = sample_ca_code(config.prn, config.sample_rate, samples_per_ms)
+    return _AcquisitionPlan(
+        sample_rate=float(config.sample_rate),
+        samples_per_ms=samples_per_ms,
+        segment_starts_ms=segment_starts_ms,
+        doppler_bins=doppler_bins,
+        time_vector=np.arange(samples_per_ms, dtype=np.float64) / config.sample_rate,
+        code_fft=np.conj(np.fft.fft(local_code)),
+    )
+
+
 def _select_ms_blocks(
     samples: np.ndarray,
     sample_rate: float,
@@ -91,6 +172,94 @@ def _select_segment_starts_ms(total_ms: int, block_count: int, segment_count: in
     return np.linspace(0, max_start, num=usable_segment_count, dtype=int)
 
 
+def _circular_code_distance(left: int, right: int, code_period_samples: int) -> int:
+    """Return the shortest distance between two code phases."""
+
+    period = max(1, int(code_period_samples))
+    delta = abs(int(left) - int(right)) % period
+    return min(delta, period - delta)
+
+
+def _unwrap_code_phases(cluster: list[AcquisitionCandidate], code_period_samples: int) -> np.ndarray:
+    """Unwrap circular code phases so a drifting peak can be fitted."""
+
+    period = max(1, int(code_period_samples))
+    phases: list[float] = []
+    for candidate in sorted(cluster, key=lambda item: item.segment_start_sample):
+        phase = float(candidate.code_phase_samples % period)
+        if phases:
+            previous = phases[-1]
+            phase += round((previous - phase) / period) * period
+            if phase - previous > period / 2.0:
+                phase -= period
+            elif previous - phase > period / 2.0:
+                phase += period
+        phases.append(phase)
+    return np.asarray(phases, dtype=np.float64)
+
+
+def _smooth_code_drift_score(
+    cluster: list[AcquisitionCandidate],
+    code_phase_tolerance_samples: int,
+    code_period_samples: int,
+) -> float:
+    """Score clusters whose code phase moves smoothly from segment to segment."""
+
+    if len(cluster) < 3:
+        return 0.0
+
+    ordered = sorted(cluster, key=lambda item: item.segment_start_sample)
+    times = np.asarray([item.segment_start_sample for item in ordered], dtype=np.float64)
+    times = (times - times[0]) / max(float(code_period_samples), 1.0)
+    if np.ptp(times) <= 0.0:
+        return 0.0
+
+    phases = _unwrap_code_phases(ordered, code_period_samples)
+    slope, intercept = np.polyfit(times, phases, deg=1)
+    residual = phases - (slope * times + intercept)
+    rms = float(np.sqrt(np.mean(residual**2)))
+    tolerance = max(float(code_phase_tolerance_samples), float(code_period_samples) * 0.03)
+    if rms > tolerance:
+        return 0.0
+    return max(0.1, 1.0 - rms / max(tolerance, 1.0))
+
+
+def _cluster_around_seed(
+    seed: AcquisitionCandidate,
+    candidates: list[AcquisitionCandidate],
+    doppler_tolerance_hz: float,
+    code_phase_tolerance_samples: int,
+    code_period_samples: int,
+) -> tuple[list[AcquisitionCandidate], float]:
+    """Return candidates that look like repeated observations of one peak."""
+
+    cluster = [
+        candidate
+        for candidate in candidates
+        if abs(candidate.doppler_hz - seed.doppler_hz) <= doppler_tolerance_hz
+    ]
+    drift_score = _smooth_code_drift_score(
+        cluster,
+        code_phase_tolerance_samples,
+        code_period_samples,
+    )
+    if drift_score <= 0.0:
+        cluster = [
+            candidate
+            for candidate in cluster
+            if _circular_code_distance(
+                candidate.code_phase_samples,
+                seed.code_phase_samples,
+                code_period_samples,
+            )
+            <= code_phase_tolerance_samples
+        ]
+        drift_score = 1.0 if cluster else 0.0
+
+    average_metric = float(np.mean([candidate.metric for candidate in cluster])) if cluster else 0.0
+    return cluster, float(len(cluster) * average_metric * drift_score)
+
+
 def _cluster_segment_candidates(
     candidates: list[AcquisitionCandidate],
     doppler_tolerance_hz: float,
@@ -102,61 +271,16 @@ def _cluster_segment_candidates(
     if not candidates:
         return [], 0.0
 
-    def circular_distance(left: int, right: int) -> int:
-        period = max(1, int(code_period_samples))
-        delta = abs(int(left) - int(right)) % period
-        return min(delta, period - delta)
-
-    def unwrap_code_phases(cluster: list[AcquisitionCandidate]) -> np.ndarray:
-        period = max(1, int(code_period_samples))
-        phases: list[float] = []
-        for candidate in sorted(cluster, key=lambda item: item.segment_start_sample):
-            phase = float(candidate.code_phase_samples % period)
-            if phases:
-                previous = phases[-1]
-                wraps = round((previous - phase) / period)
-                phase += wraps * period
-                if phase - previous > period / 2.0:
-                    phase -= period
-                elif previous - phase > period / 2.0:
-                    phase += period
-            phases.append(phase)
-        return np.asarray(phases, dtype=np.float64)
-
-    def smooth_code_drift_score(cluster: list[AcquisitionCandidate]) -> float:
-        if len(cluster) < 3:
-            return 0.0
-        ordered = sorted(cluster, key=lambda item: item.segment_start_sample)
-        times = np.asarray([item.segment_start_sample for item in ordered], dtype=np.float64)
-        times = (times - times[0]) / max(float(code_period_samples), 1.0)
-        phases = unwrap_code_phases(ordered)
-        if np.ptp(times) <= 0.0:
-            return 0.0
-        slope, intercept = np.polyfit(times, phases, deg=1)
-        residual = phases - (slope * times + intercept)
-        rms = float(np.sqrt(np.mean(residual**2)))
-        tolerance = max(float(code_phase_tolerance_samples), float(code_period_samples) * 0.03)
-        if rms > tolerance:
-            return 0.0
-        return max(0.1, 1.0 - rms / max(tolerance, 1.0))
-
     best_cluster: list[AcquisitionCandidate] = []
     best_score = -np.inf
     for seed in candidates:
-        cluster = [
-            candidate
-            for candidate in candidates
-            if abs(candidate.doppler_hz - seed.doppler_hz) <= doppler_tolerance_hz
-        ]
-        drift_score = smooth_code_drift_score(cluster)
-        if drift_score <= 0.0:
-            cluster = [
-                candidate
-                for candidate in cluster
-                if circular_distance(candidate.code_phase_samples, seed.code_phase_samples) <= code_phase_tolerance_samples
-            ]
-            drift_score = 1.0 if cluster else 0.0
-        score = float(len(cluster)) * float(np.mean([candidate.metric for candidate in cluster])) * drift_score
+        cluster, score = _cluster_around_seed(
+            seed,
+            candidates,
+            doppler_tolerance_hz,
+            code_phase_tolerance_samples,
+            code_period_samples,
+        )
         if score > best_score:
             best_cluster = cluster
             best_score = score
@@ -351,6 +475,202 @@ def _build_heatmap(
     )
 
 
+def _heatmap_peak(heatmap: np.ndarray) -> tuple[int, int]:
+    """Return the row/column of the strongest heatmap value."""
+
+    flat_index = int(np.argmax(heatmap.ravel()))
+    row, col = np.unravel_index(flat_index, heatmap.shape)
+    return int(row), int(col)
+
+
+def _heatmap_noise_floor(heatmap: np.ndarray) -> float:
+    """Return the average heatmap level used as the metric baseline."""
+
+    return float(np.mean(heatmap) + 1e-12)
+
+
+def _candidate_from_peak(
+    config: AcquisitionConfig,
+    plan: _AcquisitionPlan,
+    row: int,
+    col: int,
+    metric: float,
+    segment_start_ms: int,
+) -> AcquisitionCandidate:
+    """Build a candidate from one heatmap peak location."""
+
+    doppler_hz = float(plan.doppler_bins[row])
+    return AcquisitionCandidate(
+        prn=config.prn,
+        doppler_hz=doppler_hz,
+        carrier_frequency_hz=float(config.search_center_hz + doppler_hz),
+        code_phase_samples=int((plan.samples_per_ms - col) % plan.samples_per_ms),
+        metric=float(metric),
+        segment_start_sample=_sample_index_for_ms(int(segment_start_ms), plan.sample_rate),
+    )
+
+
+def _evaluate_segment(
+    samples: np.ndarray,
+    config: AcquisitionConfig,
+    plan: _AcquisitionPlan,
+    segment_start_ms: int,
+    log_callback=None,
+) -> _SegmentSearchResult | None:
+    """Search one segment and return its strongest acquisition peak."""
+
+    selected_blocks = _segment_blocks_for_start(
+        samples,
+        plan.sample_rate,
+        config,
+        int(segment_start_ms),
+    )
+    usable_blocks = int(selected_blocks.shape[0])
+    if usable_blocks == 0:
+        return None
+
+    heatmap, _backend, _workers = _build_heatmap(
+        selected_blocks,
+        plan.doppler_bins,
+        config,
+        plan.time_vector,
+        plan.code_fft,
+        log_callback=log_callback,
+    )
+    row, col = _heatmap_peak(heatmap)
+    metric = float(heatmap[row, col] / _heatmap_noise_floor(heatmap))
+    return _SegmentSearchResult(
+        heatmap=heatmap,
+        best_candidate=_candidate_from_peak(
+            config,
+            plan,
+            row,
+            col,
+            metric,
+            int(segment_start_ms),
+        ),
+        usable_blocks=usable_blocks,
+        segment_start_ms=int(segment_start_ms),
+    )
+
+
+def _search_segments(
+    samples: np.ndarray,
+    config: AcquisitionConfig,
+    plan: _AcquisitionPlan,
+    progress_callback=None,
+    log_callback=None,
+) -> tuple[_SegmentSearchResult, list[AcquisitionCandidate]]:
+    """Run acquisition over each requested segment."""
+
+    best_result: _SegmentSearchResult | None = None
+    segment_candidates: list[AcquisitionCandidate] = []
+
+    for segment_index, segment_start_ms in enumerate(plan.segment_starts_ms):
+        result = _evaluate_segment(
+            samples,
+            config,
+            plan,
+            int(segment_start_ms),
+            log_callback=log_callback,
+        )
+        if result is None:
+            continue
+
+        segment_candidates.append(result.best_candidate)
+        if best_result is None or result.best_candidate.metric > best_result.best_candidate.metric:
+            best_result = result
+
+        if progress_callback:
+            progress_callback(int(100 * (segment_index + 1) / max(1, plan.segment_starts_ms.size)))
+
+    if best_result is None:
+        raise ValueError("No complete 1 ms blocks were available for acquisition.")
+    return best_result, segment_candidates
+
+
+def _segment_start_ms_for_candidate(candidate: AcquisitionCandidate, sample_rate: float) -> int:
+    """Convert a candidate sample offset back to a millisecond segment index."""
+
+    return int(round(candidate.segment_start_sample / max(sample_rate * 1e-3, 1e-9)))
+
+
+def _top_heatmap_candidates(
+    heatmap: np.ndarray,
+    config: AcquisitionConfig,
+    plan: _AcquisitionPlan,
+    segment_start_ms: int,
+    limit: int = 8,
+) -> list[AcquisitionCandidate]:
+    """Return separated local maxima for display and diagnosis."""
+
+    noise_floor = _heatmap_noise_floor(heatmap)
+    candidates: list[AcquisitionCandidate] = []
+    used_locations: list[tuple[int, int]] = []
+    top_indices = np.argsort(heatmap.ravel())[-limit:][::-1]
+
+    for flat_index in top_indices:
+        row, col = np.unravel_index(int(flat_index), heatmap.shape)
+        near_existing_peak = any(
+            abs(row - prev_row) <= 1 and abs(col - prev_col) <= 2
+            for prev_row, prev_col in used_locations
+        )
+        if near_existing_peak:
+            continue
+        used_locations.append((int(row), int(col)))
+        metric = float(heatmap[row, col] / noise_floor)
+        candidates.append(
+            _candidate_from_peak(
+                config,
+                plan,
+                int(row),
+                int(col),
+                metric,
+                segment_start_ms,
+            )
+        )
+    return candidates
+
+
+def _log_acquisition_start(config: AcquisitionConfig, plan, log_callback=None) -> None:
+    """Log the selected compute plan for this PRN."""
+
+    if not log_callback:
+        return
+    gpu_text = plan.gpu_name if plan.gpu_available else "unavailable"
+    log_callback(
+        f"Acquisition PRN {config.prn}: backend {plan.active_backend}, "
+        f"workers {plan.selected_workers}/{plan.logical_cores}, GPU {gpu_text}."
+    )
+
+
+def _log_acquisition_result(
+    config: AcquisitionConfig,
+    best: AcquisitionCandidate,
+    best_usable_blocks: int,
+    consistent_segments: int,
+    sample_rate: float,
+    log_callback=None,
+) -> None:
+    """Log the final acquisition result in one compact line."""
+
+    if not log_callback:
+        return
+
+    spread_text = ""
+    if config.acquisition_segment_count == 1 and config.spread_acquisition_blocks:
+        spread_text = " spread across the source"
+    segment_text = " from a segmented deep search" if config.acquisition_segment_count > 1 else ""
+    consistency_text = f", consistent in {consistent_segments} segment(s)" if consistent_segments > 1 else ""
+    log_callback(
+        f"Acquisition PRN {config.prn}: best peak metric {best.metric:.2f} at "
+        f"search frequency {best.carrier_frequency_hz:.1f} Hz "
+        f"(relative Doppler {best.doppler_hz:+.1f} Hz), code phase {best.code_phase_samples} samples, "
+        f"using {best_usable_blocks} x 1 ms blocks starting at {best.segment_start_sample / sample_rate:.3f} s"
+        f"{spread_text}{segment_text}{consistency_text}."
+    )
+
+
 def acquire_signal(
     samples: np.ndarray,
     config: AcquisitionConfig,
@@ -359,173 +679,70 @@ def acquire_signal(
 ) -> AcquisitionResult:
     """Run a clear but not heavily optimized acquisition search."""
 
-    if samples.size == 0:
-        raise ValueError("No samples available for acquisition.")
-
-    sample_rate = config.sample_rate
-    if not np.isfinite(sample_rate) or sample_rate <= 0:
-        raise ValueError("Sample rate must be positive for acquisition.")
-    if not np.isfinite(config.search_center_hz):
-        raise ValueError("Search center must be finite for acquisition.")
-    if not np.isfinite(config.doppler_min) or not np.isfinite(config.doppler_max):
-        raise ValueError("Doppler range must be finite for acquisition.")
-    if not np.isfinite(config.doppler_step) or config.doppler_step <= 0:
-        raise ValueError("Doppler step must be positive for acquisition.")
-    if config.doppler_min > config.doppler_max:
-        raise ValueError("Doppler minimum must not exceed Doppler maximum for acquisition.")
-
-    samples_per_ms = int(round(sample_rate * 1e-3))
-    if samples_per_ms <= 0:
-        raise ValueError("Sample rate is too low for 1 ms acquisition blocks.")
-    total_ms = int(np.floor(samples.size / max(sample_rate * 1e-3, 1e-9)))
-    if total_ms <= 0:
-        raise ValueError("Selected sample window is shorter than one 1 ms acquisition block.")
-
-    segment_starts_ms = _select_segment_starts_ms(total_ms, config.integration_ms, config.acquisition_segment_count)
-    if segment_starts_ms.size == 0:
-        raise ValueError("Not enough data for one 1 ms acquisition block.")
-
-    local_code = sample_ca_code(config.prn, sample_rate, samples_per_ms)
-    code_fft = np.conj(np.fft.fft(local_code))
-    doppler_bins = np.arange(config.doppler_min, config.doppler_max + config.doppler_step, config.doppler_step)
-    if doppler_bins.size == 0:
-        raise ValueError("Doppler search produced no bins.")
-    time_vector = np.arange(samples_per_ms, dtype=np.float64) / sample_rate
+    plan = _prepare_acquisition(samples, config)
     segment_plan = resolve_compute_plan(
         config.compute_backend,
         config.max_workers,
         gpu_enabled=config.gpu_enabled,
-        max_tasks=int(doppler_bins.size),
+        max_tasks=int(plan.doppler_bins.size),
         prefer_gpu=True,
     )
+    _log_acquisition_start(config, segment_plan, log_callback)
 
-    best_heatmap = np.zeros((doppler_bins.size, samples_per_ms), dtype=np.float32)
-    best_metric = -np.inf
-    best_segment_start_ms = 0
-    best_row = 0
-    best_col = 0
-    best_usable = 0
-    segment_candidates: list[AcquisitionCandidate] = []
-
-    if log_callback:
-        gpu_text = segment_plan.gpu_name if segment_plan.gpu_available else "unavailable"
-        log_callback(
-            f"Acquisition PRN {config.prn}: backend {segment_plan.active_backend}, "
-            f"workers {segment_plan.selected_workers}/{segment_plan.logical_cores}, GPU {gpu_text}."
-        )
-
-    for segment_index, segment_start_ms in enumerate(segment_starts_ms):
-        selected_blocks = _segment_blocks_for_start(samples, sample_rate, config, int(segment_start_ms))
-        usable = int(selected_blocks.shape[0])
-        if usable == 0:
-            continue
-
-        heatmap, _backend, _workers = _build_heatmap(
-            selected_blocks,
-            doppler_bins,
-            config,
-            time_vector,
-            code_fft,
-            log_callback=log_callback,
-        )
-        flat = heatmap.ravel()
-        flat_index = int(np.argmax(flat))
-        row, col = np.unravel_index(flat_index, heatmap.shape)
-        noise_floor = float(np.mean(heatmap) + 1e-12)
-        metric = float(heatmap[row, col] / noise_floor)
-        code_phase = int((samples_per_ms - col) % samples_per_ms)
-        segment_best = AcquisitionCandidate(
-            prn=config.prn,
-            doppler_hz=float(doppler_bins[row]),
-            carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
-            code_phase_samples=code_phase,
-            metric=float(metric),
-            segment_start_sample=_sample_index_for_ms(int(segment_start_ms), sample_rate),
-        )
-        segment_candidates.append(segment_best)
-        if metric > best_metric:
-            best_metric = metric
-            best_heatmap = heatmap
-            best_segment_start_ms = int(segment_start_ms)
-            best_row = int(row)
-            best_col = int(col)
-            best_usable = usable
-
-        if progress_callback:
-            progress_callback(int(100 * (segment_index + 1) / max(1, segment_starts_ms.size)))
-
-    heatmap = best_heatmap
-    noise_floor = float(np.mean(heatmap) + 1e-12)
-    best = AcquisitionCandidate(
-        prn=config.prn,
-        doppler_hz=float(doppler_bins[best_row]),
-        carrier_frequency_hz=float(config.search_center_hz + doppler_bins[best_row]),
-        code_phase_samples=int((samples_per_ms - best_col) % samples_per_ms),
-        metric=float(best_metric),
-        segment_start_sample=_sample_index_for_ms(int(best_segment_start_ms), sample_rate),
+    best_result, segment_candidates = _search_segments(
+        samples,
+        config,
+        plan,
+        progress_callback=progress_callback,
+        log_callback=log_callback,
     )
+    heatmap = best_result.heatmap
+    best = best_result.best_candidate
+    best_usable = best_result.usable_blocks
+    best_segment_start_ms = best_result.segment_start_ms
 
     dominant_cluster, consistency_score = _cluster_segment_candidates(
         segment_candidates,
         doppler_tolerance_hz=max(float(config.doppler_step) * 2.0, 750.0),
-        code_phase_tolerance_samples=max(25, samples_per_ms // 32),
-        code_period_samples=samples_per_ms,
+        code_phase_tolerance_samples=max(25, plan.samples_per_ms // 32),
+        code_period_samples=plan.samples_per_ms,
     )
     consistent_segments = len(dominant_cluster)
     if dominant_cluster:
-        dominant_cluster = sorted(dominant_cluster, key=lambda candidate: candidate.metric, reverse=True)
+        dominant_cluster = sorted(
+            dominant_cluster,
+            key=lambda candidate: candidate.metric,
+            reverse=True,
+        )
         best = dominant_cluster[0]
-        best_segment_start_ms = int(round(best.segment_start_sample / max(sample_rate * 1e-3, 1e-9)))
-        selected_blocks = _segment_blocks_for_start(samples, sample_rate, config, best_segment_start_ms)
-        if selected_blocks.size:
-            best_usable = int(selected_blocks.shape[0])
-            heatmap, _backend, _workers = _build_heatmap(
-                selected_blocks,
-                doppler_bins,
-                config,
-                time_vector,
-                code_fft,
-                log_callback=log_callback,
-            )
-
-    flat = heatmap.ravel()
-    top_indices = np.argsort(flat)[-8:][::-1]
-    candidates: list[AcquisitionCandidate] = []
-    used_locations: list[tuple[int, int]] = []
-    for flat_index in top_indices:
-        row, col = np.unravel_index(int(flat_index), heatmap.shape)
-        if any(abs(row - prev_row) <= 1 and abs(col - prev_col) <= 2 for prev_row, prev_col in used_locations):
-            continue
-        used_locations.append((row, col))
-        code_phase = int((samples_per_ms - col) % samples_per_ms)
-        candidates.append(
-            AcquisitionCandidate(
-                prn=config.prn,
-                doppler_hz=float(doppler_bins[row]),
-                carrier_frequency_hz=float(config.search_center_hz + doppler_bins[row]),
-                code_phase_samples=code_phase,
-                segment_start_sample=_sample_index_for_ms(int(best_segment_start_ms), sample_rate),
-                metric=float(heatmap[row, col] / noise_floor),
-            )
+        best_segment_start_ms = _segment_start_ms_for_candidate(best, plan.sample_rate)
+        refreshed = _evaluate_segment(
+            samples,
+            config,
+            plan,
+            best_segment_start_ms,
+            log_callback=log_callback,
         )
+        if refreshed is not None:
+            heatmap = refreshed.heatmap
+            best_usable = refreshed.usable_blocks
 
-    if log_callback:
-        log_callback(
-            f"Acquisition PRN {config.prn}: best peak metric {best.metric:.2f} at "
-            f"search frequency {best.carrier_frequency_hz:.1f} Hz "
-            f"(relative Doppler {best.doppler_hz:+.1f} Hz), code phase {best.code_phase_samples} samples, "
-            f"using {best_usable} x 1 ms blocks starting at {best.segment_start_sample / sample_rate:.3f} s"
-            f"{' spread across the source' if config.acquisition_segment_count == 1 and config.spread_acquisition_blocks else ''}"
-            f"{' from a segmented deep search' if config.acquisition_segment_count > 1 else ''}"
-            f"{', consistent in ' + str(consistent_segments) + ' segment(s)' if consistent_segments > 1 else ''}."
-        )
+    candidates = _top_heatmap_candidates(heatmap, config, plan, best_segment_start_ms)
+    _log_acquisition_result(
+        config,
+        best,
+        best_usable,
+        consistent_segments,
+        plan.sample_rate,
+        log_callback,
+    )
 
     return AcquisitionResult(
         prn=config.prn,
-        sample_rate_hz=float(sample_rate),
+        sample_rate_hz=float(plan.sample_rate),
         search_center_hz=float(config.search_center_hz),
-        doppler_bins_hz=doppler_bins.astype(np.float32),
-        code_phases_samples=np.arange(samples_per_ms, dtype=np.int32),
+        doppler_bins_hz=plan.doppler_bins.astype(np.float32),
+        code_phases_samples=np.arange(plan.samples_per_ms, dtype=np.int32),
         heatmap=heatmap,
         best_candidate=best,
         candidates=candidates,
