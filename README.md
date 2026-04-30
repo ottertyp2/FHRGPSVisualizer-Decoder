@@ -242,6 +242,7 @@ This tab joins multiple decoded PRNs into one receiver time and position estimat
 
 - decodes broadcast ephemerides from parity-valid LNAV subframes 1, 2, and 3
 - derives subframe receive times from tracking sample offsets, bit timing, and C/A code phase
+- resolves the tracked C/A phase to the nearest code epoch before forming pseudoranges
 - applies satellite clock correction and Earth-rotation transit correction
 - solves WGS-84 position with a small transparent outlier check
 - shows the GPS week/TOW, UTC estimate, ephemeris rows, and pseudorange rows

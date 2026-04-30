@@ -15,7 +15,7 @@ from app.dsp.ephemeris import (
     satellite_clock_correction_s,
     satellite_position_ecef_m,
 )
-from app.dsp.gps_ca import CA_CODE_RATE_HZ
+from app.dsp.gps_ca import CA_CODE_LENGTH, CA_CODE_RATE_HZ
 from app.models import BitDecisionResult, NavigationDecodeResult, NavigationSubframe, TrackingState
 
 SPEED_OF_LIGHT_M_S = 299_792_458.0
@@ -240,7 +240,20 @@ def _subframe_receive_time_s(
 
 
 def _tracked_code_phase(tracking: TrackingState, ms_index: int) -> tuple[float, float]:
-    """Return the tracked code-epoch offset at one prompt integration."""
+    """Return the nearest tracked code-epoch offset at one prompt integration.
+
+    Tracking stores C/A phase as 0..1023 chips at the start of a 1 ms prompt
+    block.  Navigation-bit decisions are made from those prompt blocks, so the
+    bit edge belongs to the nearest code epoch: phases below half a code period
+    point back to the previous epoch, while phases above half a period point
+    forward to the next epoch.
+    """
+
+    def nearest_epoch_offset_s(raw_phase_chips: float, code_freq_hz: float) -> float:
+        wrapped_chips = float(raw_phase_chips) % CA_CODE_LENGTH
+        if wrapped_chips > CA_CODE_LENGTH * 0.5:
+            wrapped_chips -= CA_CODE_LENGTH
+        return wrapped_chips / code_freq_hz
 
     phases = tracking.loop_states.get("code_phase_chips")
     freqs = tracking.loop_states.get("prompt_code_freq_hz")
@@ -249,10 +262,13 @@ def _tracked_code_phase(tracking: TrackingState, ms_index: int) -> tuple[float, 
         code_freq_hz = CA_CODE_RATE_HZ
         if freqs is not None and int(ms_index) < len(freqs) and float(freqs[int(ms_index)]) > 0.0:
             code_freq_hz = float(freqs[int(ms_index)])
-        return phase_chips / code_freq_hz, phase_chips
+        return nearest_epoch_offset_s(phase_chips, code_freq_hz), phase_chips
     if tracking.sample_rate_hz > 0.0:
-        code_phase_s = float(tracking.code_phase_samples) / float(tracking.sample_rate_hz)
-        return code_phase_s, code_phase_s * CA_CODE_RATE_HZ
+        code_phase_chips = (
+            float(tracking.code_phase_samples) / float(tracking.sample_rate_hz) * CA_CODE_RATE_HZ
+        )
+        code_phase_s = nearest_epoch_offset_s(code_phase_chips, CA_CODE_RATE_HZ)
+        return code_phase_s, code_phase_chips
     return 0.0, 0.0
 
 
@@ -467,6 +483,10 @@ def compute_pvt_from_navigation(
                 f"Least-squares residual RMS {residual_rms:.1f} m.",
             ],
         )
+        if solution.used_satellites == 4:
+            candidate.summary_lines.append(
+                "Four-satellite fix is exactly determined; residual RMS has no outlier redundancy."
+            )
         if score < best_score:
             best_score = score
             best_result = candidate
