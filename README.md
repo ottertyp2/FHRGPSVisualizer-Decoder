@@ -23,6 +23,16 @@ The project is built to make the decoding chain understandable end to end:
 
 The application remains focused on offline signal analysis and diagnosis. It now includes the tested least-squares PVT core needed for a receiver position solution, while map display and network-assisted positioning remain out of scope.
 
+## Documentation
+
+Source documentation lives in `docs/code_documentation.tex` and `docs/doxygen_mainpage.dox`. To build generated API documentation after installing Doxygen, run:
+
+```powershell
+doxygen Doxyfile
+```
+
+Generated Doxygen output is written to `docs/doxygen/` and is ignored by Git.
+
 ## Why This Tool Exists
 
 Many GNSS examples jump quickly from a binary file to a black-box "lock" result. This app is aimed at the opposite workflow: show the evidence at each step, keep PRN-specific results visually separated, and make uncertain real-world captures diagnosable instead of opaque.

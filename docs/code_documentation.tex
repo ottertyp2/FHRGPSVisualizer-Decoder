@@ -1,0 +1,606 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{titlesec}
+\usepackage{url}
+
+\geometry{margin=2.4cm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black
+}
+\setlist{nosep}
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+\titleformat{\section}{\Large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.6em}{}
+
+\lstdefinestyle{pythonapi}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{black!3}
+}
+
+\newcommand{\codepath}[1]{\path{#1}}
+\newcommand{\apiitem}[2]{\item \texttt{#1}: #2}
+\newcommand{\apisym}[1]{\item \texttt{#1}}
+
+\title{GPS L1 C/A Offline Decoder and Visualizer\\Code Documentation}
+\author{Fraunhofer FHR Educational GPS Decoder Repository}
+\date{Generated for repository state on 2026-05-06}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Scope}
+
+This document describes all source code in the repository rooted at \codepath{Fraunhofer_FHR}. It covers the Python application under \codepath{app/}, the pytest suite under \codepath{app/tests/}, and the PowerShell repository tools under \codepath{tools/}. Large local IQ captures such as \codepath{*.bin} files are intentionally excluded because they are analysis assets, not source code.
+
+The application is an offline, didactic GPS L1 C/A decoder and visualizer. Its code is organized around a deliberately transparent signal-processing pipeline:
+
+\begin{enumerate}
+  \item inspect and load little-endian \codepath{complex64} IQ recordings,
+  \item acquire PRN-specific C/A signals over Doppler and code phase,
+  \item track each acquired satellite with simple carrier and code loops,
+  \item form 20 ms navigation-bit decisions from prompt integrations,
+  \item frame and verify GPS LNAV words and subframes,
+  \item decode ephemeris evidence where available,
+  \item solve an offline PVT/time result from decoded navigation and pseudorange evidence,
+  \item present each stage in a Qt GUI with PRN-specific diagnostics.
+\end{enumerate}
+
+\section{Repository Layout}
+
+\begin{longtable}{>{\ttfamily}p{0.33\linewidth}p{0.60\linewidth}}
+\textbf{Path} & \textbf{Purpose}\\
+\hline
+\codepath{app/main.py} & Qt application entry point.\\
+\codepath{app/dsp/} & Acquisition, tracking, bit sync, LNAV decoding, PVT, synthetic demos, I/O, compute backend selection, and display-oriented DSP helpers.\\
+\codepath{app/gui/} & Main Qt window, worker plumbing, and tab widgets for each workflow stage.\\
+\codepath{app/models/} & Shared dataclasses passed between GUI and DSP layers.\\
+\codepath{app/tests/} & Unit, regression, equivalence, and smoke tests.\\
+\codepath{tools/} & Local repository-management PowerShell helpers.\\
+\end{longtable}
+
+\section{Design Principles}
+
+\begin{itemize}
+  \item DSP logic lives in \codepath{app/dsp/}; GUI classes call it but do not hide signal-processing algorithms inside widgets.
+  \item User-visible evidence stays PRN-specific: acquisition candidates, tracking histories, navigation words, and PVT inputs preserve the satellite identity that produced them.
+  \item Large recordings are handled through both RAM-loaded arrays and bounded file windows. The reader in \codepath{app/dsp/io.py} is the central file-access layer.
+  \item Optional acceleration is isolated. CPU execution remains the reference path; GPU-specific code is kept in focused backend helpers such as \codepath{app/dsp/tracking_gpu.py}.
+  \item Real-capture diagnosis is first-class. Sample-rate surveys, search-center sweeps, repeated-segment acquisition evidence, and per-PRN interpretations are exposed rather than collapsed into one opaque score.
+  \item PVT is offline and evidence-driven. It uses decoded LNAV ephemerides and testable pseudorange observations, without network assistance or map services.
+\end{itemize}
+
+\section{Runtime Dependencies}
+
+The repository dependency file is intentionally small:
+
+\begin{itemize}
+  \item \texttt{numpy}: numerical arrays, FFTs, vectorized DSP, and tests.
+  \item \texttt{pyqtgraph}: plotting widgets embedded in the Qt GUI.
+  \item \texttt{PySide6}: Qt bindings for the desktop application.
+\end{itemize}
+
+CuPy/CUDA support is optional and is detected at runtime by \codepath{app/dsp/compute.py}. The application must remain runnable with:
+
+\begin{lstlisting}[style=pythonapi]
+python -m app.main
+\end{lstlisting}
+
+\section{DSP Package}
+
+\subsection{\codepath{app/dsp/acquisition.py}}
+
+\textbf{Role.} Performs GPS L1 C/A acquisition over Doppler bins and code phase. It supports single-PRN acquisition, multi-PRN scans, search-center sweeps, and sample-rate surveys. The module emphasizes diagnosable repeated-segment evidence rather than only a single heatmap peak.
+
+\textbf{Core data structures.}
+\begin{itemize}
+  \apiitem{AcquisitionConfig}{Compact settings for PRN, sample rate, Doppler search, code-period selection, workers, backend, and repeated-segment behavior.}
+  \apiitem{\_AcquisitionPlan}{Precomputed vectors shared by segment searches.}
+  \apiitem{\_SegmentSearchResult}{Best candidate plus heatmap for one searched recording segment.}
+\end{itemize}
+
+\textbf{Key entry points.}
+\begin{itemize}
+  \apiitem{acquire_signal(samples, config, progress_callback=None, log_callback=None)}{Runs one PRN acquisition and returns a full \texttt{AcquisitionResult}.}
+  \apiitem{acquisition_from_session(samples, session, ...)}{Builds \texttt{AcquisitionConfig} from GUI/session settings.}
+  \apiitem{scan_prns_from_session(samples, session, prns, ...)}{Acquires several PRNs and returns per-satellite results.}
+  \apiitem{sweep_search_centers_from_session(samples, session, search_centers_hz, prns, ...)}{Ranks IF/search-center hypotheses.}
+  \apiitem{survey_sample_rates(samples, session, sample_rates_hz, prns, ...)}{Ranks sample-rate hypotheses for ambiguous recordings.}
+\end{itemize}
+
+\textbf{Important helpers.}
+\begin{itemize}
+  \apisym{\_validate_acquisition_inputs}
+  \apisym{\_prepare_acquisition}
+  \apisym{\_select_ms_blocks}
+  \apisym{\_select_segment_starts_ms}
+  \apisym{\_build_heatmap_cpu}
+  \apisym{\_build_heatmap_gpu}
+  \apisym{\_top_heatmap_candidates}
+  \apisym{\_cluster_segment_candidates}
+  \apisym{acquisition_metric_is_strong}
+  \apisym{acquisition_result_is_plausible}
+  \apisym{acquisition_interpretation}
+  \apisym{acquisition_rank_key}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/benchmark.py}}
+
+\textbf{Role.} Benchmarks file I/O and DSP components so the GUI can report whether the current laptop is suitable for large offline recordings.
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{run_benchmark(session, progress_callback=None, log_callback=None)}{Measures representative I/O, FFT, acquisition-like, and tracking-like workload components.}
+  \apiitem{\_benchmark_fft_core}{Runs the FFT core using the resolved compute backend.}
+  \apiitem{\_component_result}{Normalizes each measured component into a display row.}
+  \apiitem{\_system_info}{Collects lightweight system information.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/bitsync.py}}
+
+\textbf{Role.} Converts millisecond prompt integrations from tracking into GPS navigation-bit decisions.
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{form_navigation_bits(prompt_ms)}{Finds the best 20 ms boundary and forms hard bit decisions.}
+  \apiitem{extract_navigation_bits(tracking)}{Applies carrier-aligned prompt extraction to a \texttt{TrackingState}.}
+  \apiitem{\_carrier_aligned_prompt_ms}{Applies simple BPSK phase alignment before bit integration.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/compute.py}}
+
+\textbf{Role.} Centralizes CPU worker policy, optional CuPy/CUDA detection, and common parallel execution helpers.
+
+\textbf{Data structures.}
+\begin{itemize}
+  \apiitem{GPUInfo}{Runtime status for optional GPU support.}
+  \apiitem{ComputePlan}{Resolved backend and worker-count decision for an operation.}
+  \apiitem{ProgressTracker}{Aggregates subtask progress into a monotonic overall percentage.}
+\end{itemize}
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{detect_logical_cores}{Returns available logical CPU cores.}
+  \apiitem{bootstrap_cuda_runtime_paths}{Adds pip-installed NVIDIA CUDA DLL paths to the current process environment when present.}
+  \apiitem{get_cupy_module}{Returns CuPy when importable and usable.}
+  \apiitem{detect_gpu_info}{Reports whether the optional GPU backend is available.}
+  \apiitem{resolve_worker_count}{Chooses an executable CPU worker count from user preference and task count.}
+  \apiitem{resolve_compute_plan}{Converts requested backend/workers into a concrete plan.}
+  \apiitem{split_nested_worker_budget}{Divides workers across nested parallel loops.}
+  \apiitem{parallel_ordered_map}{Runs independent tasks in parallel while preserving input order.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/concept_lab.py}}
+
+\textbf{Role.} Generates tiny deterministic GPS-like signals for the GUI concept lab so users can see carrier wipeoff, PRN separation, and correlation behavior without a real capture.
+
+\textbf{Data structures.}
+\begin{itemize}
+  \apiitem{ConceptLabConfig}{Synthetic signal parameters.}
+  \apiitem{ConceptLabResult}{Derived arrays displayed by the concept lab tab.}
+\end{itemize}
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{generate_concept_lab_signal(config)}{Builds the deterministic teaching signal and correlation products.}
+  \apisym{\_samples_per_ms}
+  \apisym{\_phase_samples_to_chips}
+  \apisym{\_code_for_phase}
+  \apisym{\_correlation_profile}
+  \apisym{\_component}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/demo.py}}
+
+\textbf{Role.} Creates synthetic GPS-like baseband signals for demos and tests.
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{generate_demo_signal(sample_rate, duration_s, prn, doppler_hz, code_phase_samples, cn0_like_amplitude, noise_std)}{Generates a simplified PRN-coded BPSK signal with deterministic LNAV-like data.}
+  \apiitem{\_build_demo_nav_bits}{Constructs deterministic navigation bits with an LNAV-style preamble and valid parity words.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/ephemeris.py}}
+
+\textbf{Role.} Decodes GPS LNAV ephemerides from valid subframes and computes satellite clock corrections and ECEF positions. The implementation stays close to the broadcast equations so the math remains teachable.
+
+\textbf{Data structures.}
+\begin{itemize}
+  \apiitem{GpsEphemeris}{Broadcast LNAV ephemeris for one GPS PRN.}
+  \apiitem{\_ClockFields}{Internal parsed subframe-1 clock fields.}
+  \apiitem{\_OrbitPart2}{Internal parsed subframe-2 orbit fields.}
+  \apiitem{\_OrbitPart3}{Internal parsed subframe-3 orbit fields.}
+\end{itemize}
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{decode_ephemeris(prn, subframes)}{Builds one complete ephemeris from subframes 1, 2, and 3.}
+  \apiitem{gps_time_delta_seconds(delta_s)}{Wraps GPS time differences to half-week range.}
+  \apiitem{satellite_clock_correction_s(ephemeris, transmit_time_s)}{Computes satellite clock correction.}
+  \apiitem{satellite_position_ecef_m(ephemeris, transmit_time_s)}{Computes satellite ECEF position at transmit time.}
+  \apiitem{rotate_ecef_for_transit(ecef_m, travel_time_s)}{Rotates transmit-time ECEF coordinates into the receive-time frame.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/gps_ca.py}}
+
+\textbf{Role.} Generates and samples GPS L1 C/A PRN codes.
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{generate_ca_code(prn)}{Returns one 1023-chip PRN code as \texttt{+/-1} values.}
+  \apiitem{sample_ca_code(prn, sample_rate, num_samples, code_phase_chips=0, code_rate_hz=1.023e6)}{Samples a local code replica at a requested sample rate.}
+  \apiitem{code_phase_samples_to_chips(code_phase_samples, sample_rate)}{Converts a sample-index code phase into chips.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/io.py}}
+
+\textbf{Role.} Provides all raw IQ inspection and loading behavior for little-endian \texttt{complex64} recordings.
+
+\textbf{Data structures.}
+\begin{itemize}
+  \apiitem{Complex64FileSource}{Memory-mapped, windowed reader for very large IQ files.}
+\end{itemize}
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{common_sample_rate_hints(total_samples)}{Returns durations for common GNSS sample-rate hypotheses.}
+  \apiitem{inspect_complex64_file(file_path, sample_rate, preview_samples)}{Returns metadata and preview statistics.}
+  \apiitem{load_complex64_samples(file_path, start_sample, sample_count)}{Loads a bounded sample window.}
+  \apiitem{load_complex64_samples_with_progress}{Loads a bounded window in chunks.}
+  \apiitem{load_complex64_file}{Loads an entire recording into RAM.}
+  \apiitem{load_complex64_file_with_progress}{Loads an entire recording into RAM with progress reporting.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/navdecode.py}}
+
+\textbf{Role.} Performs first-step GPS LNAV framing: preamble search, 30-bit word alignment, parity checks, conservative single-bit repair, TLM/HOW parsing, and GUI-ready subframe fields.
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{compute_lnav_parity(data_bits, d29_star, d30_star)}{Computes GPS LNAV parity bits \texttt{D25..D30}.}
+  \apiitem{check_lnav_word(word_bits, previous_word=None)}{Checks parity for one 30-bit LNAV word.}
+  \apiitem{extract_data_bits(word, previous_word=None)}{Recovers de-whitened 24-bit data payload.}
+  \apiitem{parse_tlm(word, previous_word=None)}{Decodes teaching/display TLM fields.}
+  \apiitem{parse_how(word, previous_word=None)}{Decodes TOW count and subframe ID.}
+  \apiitem{classify_subframe(subframe_id)}{Returns a didactic label for subframe type.}
+  \apiitem{maybe_correct_word(word_bits, previous_word, confidences)}{Attempts one unambiguous low-confidence bit repair.}
+  \apiitem{build_subframes(values, preamble_indices, inverted_flag, confidences)}{Groups bit streams into candidate LNAV subframes.}
+  \apiitem{decode_navigation_bits(bits)}{Searches for preambles and decodes LNAV framing.}
+  \apiitem{decode_navigation_from_tracking(tracking, bit_source, progress_callback=None, log_callback=None)}{Runs bit extraction and LNAV decoding from tracking output.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/pvt.py}}
+
+\textbf{Role.} Implements receiver position, velocity/time helper routines and the offline PVT builder that consumes decoded navigation evidence.
+
+\textbf{Data structures.}
+\begin{itemize}
+  \apiitem{PositionSolution}{Least-squares receiver ECEF/LLA position and clock bias.}
+  \apiitem{PseudorangeObservation}{One observation formed from valid LNAV and tracking timing evidence.}
+  \apiitem{PVTComputationResult}{End-to-end PVT result and supporting evidence.}
+  \apiitem{\_SubframeTiming}{Internal receive-time evidence for a decoded subframe.}
+  \apiitem{\_SubframeArrival}{Internal decoded subframe arrival tied to file time.}
+  \apiitem{\_ClockCorrectedArrival}{Internal arrival after satellite clock correction.}
+\end{itemize}
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{lla_to_ecef(latitude_deg, longitude_deg, altitude_m)}{Converts WGS-84 geodetic coordinates to ECEF metres.}
+  \apiitem{ecef_to_lla(ecef_m)}{Converts ECEF metres to WGS-84 latitude, longitude, and altitude.}
+  \apiitem{solve_position_from_pseudoranges(satellite_positions_m, pseudoranges_m)}{Solves receiver ECEF position and clock bias from at least four satellites.}
+  \apiitem{expand_gps_week(week_number_mod1024, reference)}{Expands a 10-bit LNAV week number near a reference date.}
+  \apiitem{gps_utc_datetime(gps_week, time_of_week_s, leap_seconds=18)}{Converts GPS week/TOW to UTC.}
+  \apiitem{compute_pvt_from_navigation(tracking_by_prn, bit_results_by_prn, nav_results_by_prn, ...)}{Builds ephemerides, pseudoranges, receiver position, and GPS/UTC time.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/pvt_pipeline.py}}
+
+\textbf{Role.} Wires existing DSP stages for the PVT tab: acquire several PRNs, track them, decode LNAV, then call the PVT computation layer.
+
+\textbf{Data structures and entry points.}
+\begin{itemize}
+  \apiitem{PVTPipelineResult}{Contains outputs from the automated PVT teaching pipeline.}
+  \apiitem{run_pvt_pipeline(file_path, session)}{Runs acquisition, tracking, LNAV decode, and PVT solve on one file window.}
+  \apiitem{\_pvt_session}{Builds a session variant for pipeline defaults.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/tracking.py}}
+
+\textbf{Role.} Implements the educational carrier/code tracking loop after acquisition. It supports RAM arrays and streamed file windows, CPU and optional GPU vector math, and PRN-specific diagnostics.
+
+\textbf{Internal data structures.}
+\begin{itemize}
+  \apiitem{\_TrackingLoop}{Mutable carrier/code state.}
+  \apiitem{\_CorrelatorOutput}{Prompt, early, and late outputs for one millisecond.}
+  \apiitem{\_TrackingMath}{Small NumPy/CuPy adapter.}
+  \apiitem{\_TrackingHistory}{Preallocated arrays filled by the loop.}
+\end{itemize}
+
+\textbf{Public entry points.}
+\begin{itemize}
+  \apiitem{track_signal(samples, session, acquisition, source_start_sample=0, ...)}{Tracks one PRN from an in-memory sample array.}
+  \apiitem{track_file(file_path, start_sample, session, acquisition, ...)}{Tracks one PRN directly from a large file without loading the full recording.}
+\end{itemize}
+
+\textbf{Important helpers.}
+\begin{itemize}
+  \apisym{\_validate_tracking_inputs}
+  \apisym{\_initial_tracking_loop}
+  \apisym{\_tracking_math_for_backend}
+  \apisym{\_sample_ca_code_for_loop}
+  \apisym{\_wipe_carrier}
+  \apisym{\_correlate_prompt_early_late}
+  \apisym{\_correlate_block_gpu}
+  \apisym{\_loop_discriminators}
+  \apisym{\_advance_tracking_loop}
+  \apisym{\_detect_lock}
+  \apisym{\_build_tracking_state}
+  \apisym{\_run_tracking_loop}
+  \apisym{\_iter_sample_blocks}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/tracking_gpu.py}}
+
+\textbf{Role.} Contains the optional CuPy raw kernel for tracking correlators. Keeping this file separate preserves a readable CPU-oriented teaching path in \codepath{tracking.py}.
+
+\textbf{Entry point.}
+\begin{itemize}
+  \apiitem{get_tracking_correlator_kernel()}{Compiles and returns the optional CuPy E/P/L correlator kernel.}
+\end{itemize}
+
+\subsection{\codepath{app/dsp/utils.py}}
+
+\textbf{Role.} Provides display-oriented DSP helpers for decimation, smoothing, windows, spectrum, waterfall, and bit formatting.
+
+\textbf{Entry points.}
+\begin{itemize}
+  \apiitem{decimate_for_display(values, max_points)}{Returns a compact copy suitable for plotting.}
+  \apiitem{moving_average(values, window)}{Smooths display traces.}
+  \apiitem{get_window(window_name, length)}{Returns a standard FFT window.}
+  \apiitem{compute_spectrum(samples, sample_rate, fft_size, window_name, average_count, session=None)}{Computes averaged spectrum data.}
+  \apiitem{compute_waterfall(samples, sample_rate, fft_size, step, window_name, max_rows, session=None)}{Builds a compact waterfall matrix.}
+  \apiitem{bits_to_str(bits)}{Formats bit arrays as a compact string.}
+\end{itemize}
+
+\section{Models}
+
+\subsection{\codepath{app/models/session.py}}
+
+\textbf{Role.} Defines the shared dataclasses that form the contract between GUI tabs, worker threads, DSP modules, and tests.
+
+\textbf{Session and file state.}
+\begin{itemize}
+  \apiitem{SessionConfig}{User-selected analysis settings such as file path, sample rate, PRN, acquisition/tracking limits, backend, preload/windowing, and PVT settings.}
+  \apiitem{FileMetadata}{Raw IQ file description, sample count, duration, preview statistics, and rate-hypothesis hints.}
+\end{itemize}
+
+\textbf{Acquisition state.}
+\begin{itemize}
+  \apiitem{AcquisitionCandidate}{One heatmap peak candidate with PRN, Doppler, code phase, metric, and segment evidence.}
+  \apiitem{AcquisitionResult}{Full acquisition output for one PRN and search-center hypothesis.}
+  \apiitem{SearchCenterSweepEntry}{One ranked search-center result.}
+  \apiitem{SearchCenterSweepResult}{A collection of search-center sweep entries.}
+  \apiitem{SampleRateSurveyEntry}{One ranked sample-rate hypothesis.}
+  \apiitem{SampleRateSurveyResult}{A collection of sample-rate survey entries.}
+\end{itemize}
+
+\textbf{Tracking and navigation state.}
+\begin{itemize}
+  \apiitem{TrackingState}{Per-millisecond prompt/early/late, carrier/code estimates, lock evidence, and IQ previews.}
+  \apiitem{BitDecisionResult}{Navigation-bit decisions, confidences, polarity, and bit-boundary evidence.}
+  \apiitem{NavigationField}{One decoded or coarse LNAV display field.}
+  \apiitem{NavigationWord}{One 30-bit LNAV word with parity and repair metadata.}
+  \apiitem{NavigationSubframe}{One 10-word LNAV subframe view.}
+  \apiitem{NavigationDecodeResult}{Preamble, inversion, subframe, and field results from nav decoding.}
+\end{itemize}
+
+\textbf{Benchmark and demo state.}
+\begin{itemize}
+  \apiitem{BenchmarkComponentResult}{One measured subsystem row.}
+  \apiitem{BenchmarkResult}{Aggregate benchmark status and component rows.}
+  \apiitem{DemoSignalResult}{Synthetic signal plus reference truth values.}
+\end{itemize}
+
+\section{GUI Package}
+
+\subsection{\codepath{app/main.py}}
+
+\textbf{Role.} Creates the Qt application, instantiates \texttt{MainWindow}, and starts the event loop through \texttt{main()}.
+
+\subsection{\codepath{app/gui/workers.py}}
+
+\textbf{Role.} Keeps long-running DSP actions off the UI thread.
+
+\begin{itemize}
+  \apiitem{WorkerSignals}{Qt signals for result, error, progress, log, and finished notifications.}
+  \apiitem{Worker}{Generic \texttt{QRunnable} wrapper around a callable.}
+\end{itemize}
+
+\subsection{\codepath{app/gui/main_window.py}}
+
+\textbf{Role.} Top-level Qt controller. It owns the session state, tab instances, loaded sample windows, background workers, and transitions between acquisition, tracking, navigation decode, and PVT.
+
+\textbf{Major responsibilities.}
+\begin{itemize}
+  \item File selection, metadata inspection, RAM/windowed loading decisions, and display-sample previews.
+  \item Session synchronization from GUI controls.
+  \item Stale-result protection through processing-context signatures.
+  \item Acquisition, all-PRN scan, search-center sweep, and sample-rate survey orchestration.
+  \item Tracking orchestration for selected PRNs.
+  \item Navigation decode orchestration from tracking outputs.
+  \item PVT solve and automated PVT pipeline orchestration.
+  \item Demo signal generation and benchmark dispatch.
+\end{itemize}
+
+\textbf{Important methods.}
+\begin{itemize}
+  \apisym{inspect_file}
+  \apisym{ensure_samples}
+  \apisym{load_display_samples}
+  \apisym{load_acquisition_samples}
+  \apisym{current_window_samples}
+  \apisym{start_acquisition}
+  \apisym{scan_all_prns}
+  \apisym{start_search_center_sweep}
+  \apisym{start_sample_rate_survey}
+  \apisym{start_tracking}
+  \apisym{decode_navigation}
+  \apisym{solve_pvt_from_decoded}
+  \apisym{start_pvt_pipeline}
+  \apisym{generate_demo}
+  \apisym{start_benchmark}
+\end{itemize}
+
+\subsection{GUI Tabs}
+
+\begin{longtable}{>{\ttfamily}p{0.34\linewidth}p{0.58\linewidth}}
+\textbf{Path} & \textbf{Class and responsibility}\\
+\hline
+\codepath{app/gui/tabs/session_tab.py} & \texttt{SessionTab}: file loading, session parameters, RAM/backend status, progress, and log output.\\
+\codepath{app/gui/tabs/raw_signal_tab.py} & \texttt{RawSignalTab}: time-domain views of raw IQ samples.\\
+\codepath{app/gui/tabs/iq_tab.py} & \texttt{IQPlaneTab}: IQ scatter and phasor diagnostics for selected sources.\\
+\codepath{app/gui/tabs/spectrum_tab.py} & \texttt{SpectrumTab}: averaged FFT spectrum and waterfall display.\\
+\codepath{app/gui/tabs/acquisition_tab.py} & \texttt{AcquisitionTab}: PRN list parsing, acquisition heatmap, Doppler/code-phase slices, PRN/Doppler overview, search-center sweep, and sample-rate survey displays.\\
+\codepath{app/gui/tabs/tracking_tab.py} & \texttt{TrackingTab}: lock, prompt/early/late, DLL/PLL, code/carrier estimates, and IQ-stage diagnostics.\\
+\codepath{app/gui/tabs/navigation_tab.py} & \texttt{NavigationTab}: bit extraction, LNAV words, subframes, fields, and PRN-specific navigation results.\\
+\codepath{app/gui/tabs/pvt_tab.py} & \texttt{PVTTab}: PVT pipeline settings, receiver solution, ephemeris table, and observation table.\\
+\codepath{app/gui/tabs/benchmark_tab.py} & \texttt{BenchmarkTab}: laptop suitability and component throughput results.\\
+\codepath{app/gui/tabs/concept_lab_tab.py} & \texttt{ConceptLabTab}: synthetic signal concept demonstrations and plots.\\
+\codepath{app/gui/tabs/learning_tab.py} & \texttt{LearningTab}: compact explanation of the current receiver pipeline state.\\
+\end{longtable}
+
+\subsection{\codepath{app/gui/tabs/acquisition_tab.py}}
+
+\textbf{Notable methods.}
+\begin{itemize}
+  \apisym{parse_prn_list}
+  \apisym{selected_scan_prns}
+  \apisym{build_prn_doppler_overview}
+  \apisym{threshold_prn_doppler_overview}
+  \apisym{sparse_prn_axis_ticks}
+  \apisym{overview_marker_rows}
+  \apisym{best_heatmap_indices}
+  \apisym{codephase_slice}
+  \apisym{doppler_slice}
+  \apisym{update_result}
+  \apisym{update_sweep_results}
+  \apisym{update_sample_rate_survey}
+  \apisym{build_search_centers}
+\end{itemize}
+
+\subsection{\codepath{app/gui/tabs/navigation_tab.py}}
+
+\textbf{Notable methods.}
+\begin{itemize}
+  \apisym{set_available_prns}
+  \apisym{bit_source_mode}
+  \apisym{update_results}
+  \apisym{\_refresh_decoded_fields_table}
+  \apisym{\_format_almanac_ephemeris}
+\end{itemize}
+
+\subsection{\codepath{app/gui/tabs/pvt_tab.py}}
+
+\textbf{Notable methods.}
+\begin{itemize}
+  \apisym{pipeline_settings}
+  \apisym{clear_result}
+  \apisym{update_result}
+  \apisym{\_update_ephemeris_table}
+  \apisym{\_update_observation_table}
+\end{itemize}
+
+\section{Tests}
+
+The tests document expected behavior and guard against regressions in DSP math, large-file behavior, GUI source switching, optional acceleration, and repository policy.
+
+\begin{longtable}{>{\ttfamily}p{0.36\linewidth}p{0.56\linewidth}}
+\textbf{Test file} & \textbf{Coverage}\\
+\hline
+\codepath{app/tests/conftest.py} & Pytest import-path and Qt defaults.\\
+\codepath{app/tests/test_acceleration_paths.py} & CPU multi-worker equivalence, optional GPU equivalence, and GPU-to-CPU fallback behavior.\\
+\codepath{app/tests/test_acquisition_confidence.py} & Acquisition plausibility, ranking, and segment-consistency scoring.\\
+\codepath{app/tests/test_acquisition_demo.py} & Synthetic acquisition truth, PRN identity, and invalid-window validation.\\
+\codepath{app/tests/test_benchmark.py} & Benchmark result component sanity.\\
+\codepath{app/tests/test_compute.py} & Worker-count policy and GPU detection edge cases.\\
+\codepath{app/tests/test_concept_lab.py} & Concept-lab correlation peaks and PRN separability.\\
+\codepath{app/tests/test_gps_ca.py} & C/A code length, values, reference starts, PRN taps, caching, and sampling validation.\\
+\codepath{app/tests/test_gui_smoke.py} & Main window smoke tests plus acquisition, stale-context, source, and control-regression checks.\\
+\codepath{app/tests/test_io.py} & Complex64 inspection, loading, sample-rate hints, and window capping.\\
+\codepath{app/tests/test_large_file_io.py} & Windowed block reading from large-file source abstraction.\\
+\codepath{app/tests/test_pvt.py} & PVT solver, GPS week expansion, UTC conversion, and tracked code-phase timing.\\
+\codepath{app/tests/test_real_capture_helpers.py} & Real-capture diagnosis helpers: segment consistency and sample-rate survey.\\
+\codepath{app/tests/test_repo_policy.py} & Repository delivery and sync policy visibility.\\
+\codepath{app/tests/test_search_center_sweep.py} & Search-center sweep ranking and worker-budget splitting.\\
+\codepath{app/tests/test_source_switching.py} & Demo-to-real-file source switching.\\
+\codepath{app/tests/test_tracking_bits_nav.py} & LNAV parity, repair, subframe grouping, tracking validation, bit extraction, and nav pipeline progress.\\
+\end{longtable}
+
+\section{Repository Tools}
+
+\subsection{\codepath{tools/check_git_sync.ps1}}
+
+\textbf{Role.} Quick pre-push verification helper for repository sync policy. It is intended to be run before sharing work when checking branch/remote state is useful.
+
+\subsection{\codepath{tools/install_git_hooks.ps1}}
+
+\textbf{Role.} Installs local Git hooks from \codepath{.githooks/}. The repository currently includes a pre-push hook location.
+
+\subsection{\codepath{.githooks/pre-push}}
+
+\textbf{Role.} Enforces the repository sync convention at push time. When pushing to \texttt{origin}, it verifies that \texttt{origin} has at least two push URLs configured so GitHub and GitLab can receive the same commit.
+
+\section{Package Initializers}
+
+\begin{longtable}{>{\ttfamily}p{0.34\linewidth}p{0.58\linewidth}}
+\textbf{File} & \textbf{Description}\\
+\hline
+\codepath{app/__init__.py} & Declares the GPS L1 C/A offline decoder package.\\
+\codepath{app/dsp/__init__.py} & Declares the DSP package.\\
+\codepath{app/gui/__init__.py} & Declares the Qt GUI package.\\
+\codepath{app/gui/tabs/__init__.py} & Declares GUI tab widgets package.\\
+\codepath{app/models/__init__.py} & Declares shared dataclasses package.\\
+\end{longtable}
+
+\section{End-to-End Data Flow}
+
+\begin{enumerate}
+  \item \texttt{SessionTab} and \texttt{MainWindow} collect a \texttt{SessionConfig}.
+  \item \codepath{app/dsp/io.py} inspects or loads a recording window.
+  \item \codepath{app/dsp/acquisition.py} searches PRNs and produces \texttt{AcquisitionResult} objects.
+  \item \codepath{app/dsp/tracking.py} uses acquisition peaks to produce \texttt{TrackingState} histories.
+  \item \codepath{app/dsp/bitsync.py} forms \texttt{BitDecisionResult} data from prompt integrations.
+  \item \codepath{app/dsp/navdecode.py} builds \texttt{NavigationDecodeResult} subframes and fields.
+  \item \codepath{app/dsp/ephemeris.py} decodes broadcast ephemerides from valid subframes.
+  \item \codepath{app/dsp/pvt.py} forms observations and solves receiver position/time.
+  \item GUI tabs render the evidence at each stage while keeping PRNs visually separated.
+\end{enumerate}
+
+\section{Build Notes for This Document}
+
+This file is ordinary LaTeX and can be compiled with a standard distribution:
+
+\begin{lstlisting}[style=pythonapi]
+pdflatex docs/code_documentation.tex
+\end{lstlisting}
+
+No generated PDF is committed by default. The source file is the repository artifact; generated binaries should remain local unless explicitly needed for a release bundle.
+
+\end{document}

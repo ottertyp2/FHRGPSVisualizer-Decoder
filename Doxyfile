@@ -1,0 +1,85 @@
+# Doxygen configuration for the GPS L1 C/A offline decoder.
+#
+# Generated documentation is written below docs/doxygen/ and is intentionally
+# ignored by Git. Commit the source documentation files, not generated HTML,
+# LaTeX, or search-index artifacts.
+
+PROJECT_NAME           = "GPS L1 C/A Offline Decoder"
+PROJECT_BRIEF          = "Educational offline GPS L1 C/A decoder and visualizer"
+PROJECT_NUMBER         = "main"
+
+OUTPUT_DIRECTORY       = docs/doxygen
+CREATE_SUBDIRS         = NO
+OUTPUT_LANGUAGE        = English
+
+INPUT                  = app \
+                         tools \
+                         .githooks \
+                         README.md \
+                         docs/doxygen_mainpage.dox \
+                         docs/code_documentation.tex
+RECURSIVE              = YES
+FILE_PATTERNS          = *.py \
+                         *.ps1 \
+                         pre-push \
+                         *.md \
+                         *.dox \
+                         *.tex
+EXCLUDE_PATTERNS       = */__pycache__/* \
+                         */.pytest_cache/* \
+                         */.venv/* \
+                         */venv/* \
+                         *.bin \
+                         *.dat \
+                         *.iq \
+                         *.raw
+EXTENSION_MAPPING      = ps1=Python
+OPTIMIZE_OUTPUT_JAVA   = YES
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = YES
+INLINE_INHERITED_MEMB  = YES
+FULL_PATH_NAMES        = NO
+STRIP_FROM_PATH        = .
+
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MULTILINE_CPP_IS_BRIEF = NO
+INHERIT_DOCS           = YES
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 4
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_DYNAMIC_SECTIONS  = YES
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+SEARCHENGINE           = YES
+SERVER_BASED_SEARCH    = NO
+
+GENERATE_LATEX         = YES
+LATEX_OUTPUT           = latex
+PDF_HYPERLINKS         = YES
+USE_PDFLATEX           = YES
+LATEX_BATCHMODE        = YES
+LATEX_HIDE_INDICES     = NO
+
+GENERATE_XML           = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+
+HAVE_DOT               = NO
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+CLASS_DIAGRAMS         = YES
+
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO

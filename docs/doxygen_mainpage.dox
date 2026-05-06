@@ -1,0 +1,343 @@
+/**
+@mainpage GPS L1 C/A Offline Decoder Documentation
+
+@section dox_overview Overview
+
+This repository contains an educational desktop application for offline GPS
+L1 C/A signal analysis. It is not arranged as a black-box receiver. The code is
+written so that each receiver stage exposes enough evidence for a learner or
+developer to understand why a PRN looks believable, weak, stale, or unusable.
+
+The central workflow is:
+
+1. Inspect a little-endian complex64 IQ file.
+2. Select a bounded sample window or load a small recording into RAM.
+3. Acquire PRN-specific C/A signals over Doppler and code phase.
+4. Track a selected PRN with early, prompt, and late correlators.
+5. Form 20 ms navigation bits from 1 ms prompt integrations.
+6. Decode GPS LNAV preambles, words, parity, and subframes.
+7. Decode ephemerides from valid subframes 1, 2, and 3.
+8. Build pseudorange observations and solve an offline PVT/time estimate.
+9. Display the evidence in Qt tabs without losing PRN identity.
+
+@section dox_quick_start Quick Start
+
+Install the Python dependencies and run the GUI:
+
+@code{.ps1}
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m app.main
+@endcode
+
+Generate Doxygen documentation when Doxygen is installed:
+
+@code{.ps1}
+doxygen Doxyfile
+@endcode
+
+The generated HTML entry point is:
+
+@code
+docs/doxygen/html/index.html
+@endcode
+
+Generated Doxygen output is intentionally ignored by Git. Commit the source
+documentation files and regenerate local HTML/PDF artifacts as needed.
+
+@section dox_architecture Architecture Map
+
+@subsection dox_dsp DSP Layer: app/dsp
+
+The DSP package contains the receiver math and file-access logic. GUI code
+should call this layer rather than reimplement signal processing inside widgets.
+
+- @ref acquisition_py "acquisition.py" searches Doppler/code phase, ranks PRN
+  evidence, clusters repeated segment candidates, and runs sample-rate or
+  search-center surveys.
+- @ref tracking_py "tracking.py" runs the educational tracking loop and returns
+  millisecond histories for prompt, early, late, carrier, code, lock, and IQ
+  preview traces.
+- @ref bitsync_py "bitsync.py" turns prompt integrations into 50 bps navigation
+  bits.
+- @ref navdecode_py "navdecode.py" finds LNAV preambles, checks parity, repairs
+  at most one low-confidence bit when safe, and builds GUI-readable subframes.
+- @ref ephemeris_py "ephemeris.py" decodes broadcast ephemerides and computes
+  satellite clock corrections and ECEF positions.
+- @ref pvt_py "pvt.py" builds pseudorange observations and solves receiver
+  position/time.
+- @ref pvt_pipeline_py "pvt_pipeline.py" wires acquisition, tracking, navigation,
+  ephemeris, and PVT into one bounded teaching pipeline.
+- @ref io_py "io.py" is the single source of truth for complex64 file inspection,
+  RAM loads, and windowed large-file reads.
+- @ref compute_py "compute.py" resolves CPU/GPU backend policy and worker counts.
+- @ref gps_ca_py "gps_ca.py" generates and samples GPS C/A PRN codes.
+- @ref utils_py "utils.py" provides display-oriented spectrum, waterfall, window,
+  smoothing, and bit-format helpers.
+- @ref demo_py "demo.py" and @ref concept_lab_py "concept_lab.py" produce
+  deterministic synthetic signals for tests and teaching views.
+
+@subsection dox_models Model Layer: app/models
+
+@ref session_py "session.py" defines the dataclasses passed between worker
+threads, DSP modules, and GUI tabs. These dataclasses are the main integration
+contract. When adding a new workflow stage, prefer extending this model layer
+over passing ad hoc dictionaries through the UI.
+
+Important model families:
+
+- Session and file state: SessionConfig, FileMetadata.
+- Acquisition state: AcquisitionCandidate, AcquisitionResult,
+  SearchCenterSweepResult, SampleRateSurveyResult.
+- Tracking and navigation state: TrackingState, BitDecisionResult,
+  NavigationWord, NavigationSubframe, NavigationDecodeResult.
+- Benchmark and demo state: BenchmarkComponentResult, BenchmarkResult,
+  DemoSignalResult.
+
+@subsection dox_gui GUI Layer: app/gui
+
+The Qt GUI owns interaction state and visualization, but it delegates heavy work
+to the DSP layer through worker threads.
+
+- @ref main_window_py "main_window.py" is the top-level controller. It owns the
+  session, loaded sample windows, worker lifecycle, stale-result checks, and
+  transitions between acquisition, tracking, navigation, PVT, demos, and
+  benchmarks.
+- @ref workers_py "workers.py" provides a small QRunnable wrapper so long DSP
+  tasks do not block the UI thread.
+- @ref tabs "app/gui/tabs" contains the individual workflow views: session,
+  raw signal, IQ plane, spectrum, acquisition, tracking, navigation, PVT,
+  benchmark, concept lab, and learning overview.
+
+@subsection dox_tools Tools and Hooks
+
+The repository includes PowerShell helpers and a pre-push hook for keeping the
+delivery workflow explicit:
+
+- @c tools/check_git_sync.ps1 checks branch and remote sync assumptions before a
+  shareable push.
+- @c tools/install_git_hooks.ps1 installs scripts from @c .githooks.
+- @c .githooks/pre-push verifies that pushes to @c origin have both hosted push
+  URLs configured.
+
+@subsection dox_tests Test Layer: app/tests
+
+The pytest suite is part of the documentation. It states the expected behavior
+for GPS C/A generation, acquisition confidence, tracking validation, navigation
+parity, PVT solving, large-file I/O, GUI source switching, optional acceleration,
+and repository delivery policy.
+
+@section dox_receiver_flow Receiver Data Flow
+
+@verbatim
+SessionConfig
+    |
+    v
+complex64 file inspection/load  ->  FileMetadata and sample windows
+    |
+    v
+acquisition.py                  ->  AcquisitionResult per PRN
+    |
+    v
+tracking.py                     ->  TrackingState per PRN
+    |
+    v
+bitsync.py                      ->  BitDecisionResult per PRN
+    |
+    v
+navdecode.py                    ->  NavigationDecodeResult per PRN
+    |
+    v
+ephemeris.py                    ->  GpsEphemeris per valid PRN
+    |
+    v
+pvt.py                          ->  PVTComputationResult
+@endverbatim
+
+@section dox_extension_guidance Extension Guidance
+
+@subsection dox_new_dsp Adding DSP Behavior
+
+Keep new signal-processing logic in @c app/dsp. If the result needs to be shown
+in the GUI, add or extend a dataclass in @c app/models/session.py, then teach the
+relevant tab how to render that model. Add tests when the change affects DSP
+math, file windows, navigation evidence, or PVT results.
+
+@subsection dox_large_files Large File Handling
+
+Recorded IQ files can be many gigabytes. Prefer bounded reads through
+Complex64FileSource or explicit sample windows. Do not silently load an entire
+large capture into RAM from a GUI action.
+
+@subsection dox_acceleration Optional Acceleration
+
+The CPU path is the reference implementation. GPU code should remain optional,
+isolated, and able to fall back to CPU when CuPy/CUDA is unavailable or a runtime
+probe fails.
+
+@subsection dox_pvt PVT Boundaries
+
+PVT logic is in scope only when backed by decoded navigation data and testable
+pseudorange inputs. Do not add map display, network-assisted positioning, or
+claims of a fix when parity/ephemeris evidence is insufficient.
+
+@section dox_latex Manual LaTeX Companion
+
+The repository also includes a hand-written LaTeX source companion at
+@c docs/code_documentation.tex. That document gives a narrative file-by-file API
+inventory. Doxygen complements it with generated cross references from the code.
+
+*/
+
+/**
+@page acquisition_py app/dsp/acquisition.py
+
+Acquisition searches each requested PRN over Doppler and code phase. The module
+builds reusable local code FFTs, evaluates one or more recording segments, ranks
+heatmap peaks, and reports whether the best peak is strong, plausible, weak, or
+only a noise-like candidate.
+
+Use acquire_signal() for one PRN, scan_prns_from_session() for a PRN list,
+sweep_search_centers_from_session() for IF hypotheses, and
+survey_sample_rates() for sample-rate diagnosis.
+*/
+
+/**
+@page tracking_py app/dsp/tracking.py
+
+Tracking consumes an AcquisitionResult and produces a TrackingState. The loop
+uses early, prompt, and late code replicas plus simple DLL/PLL/FLL updates. It
+can process in-memory sample arrays or stream bounded blocks from a file.
+
+The GPU path is optional. The CPU path remains the readable reference.
+*/
+
+/**
+@page bitsync_py app/dsp/bitsync.py
+
+Bit synchronization converts 1 ms prompt integrations into 20 ms navigation-bit
+decisions. It tries candidate bit boundaries, applies simple BPSK phase
+alignment, and returns hard decisions with confidence evidence.
+*/
+
+/**
+@page navdecode_py app/dsp/navdecode.py
+
+Navigation decoding searches for LNAV preambles, aligns 30-bit words, checks
+parity, extracts TLM/HOW fields, groups ten-word subframes, and labels coarse
+payload fields for GUI display. Single-bit repair is conservative and only
+accepted when low-confidence evidence makes one repair unambiguous.
+*/
+
+/**
+@page ephemeris_py app/dsp/ephemeris.py
+
+Ephemeris decoding reads valid LNAV subframes 1, 2, and 3, recovers broadcast
+clock/orbit fields, computes satellite clock correction, solves eccentric
+anomaly, and returns satellite ECEF positions using the GPS broadcast equations.
+*/
+
+/**
+@page pvt_py app/dsp/pvt.py
+
+PVT code converts decoded navigation and tracking timing into pseudorange
+observations. The least-squares solver estimates receiver ECEF position and
+clock bias from satellite positions and pseudoranges. It also includes WGS-84
+ECEF/LLA conversion and GPS-week/UTC helpers.
+*/
+
+/**
+@page pvt_pipeline_py app/dsp/pvt_pipeline.py
+
+The PVT pipeline is a convenience layer for the GUI. It runs bounded acquisition,
+tracking, navigation decoding, ephemeris decoding, and PVT computation without
+moving DSP details into the widget layer.
+*/
+
+/**
+@page io_py app/dsp/io.py
+
+I/O helpers inspect and load little-endian complex64 IQ files. Complex64FileSource
+supports memory-mapped window reads and block iteration for very large captures.
+*/
+
+/**
+@page compute_py app/dsp/compute.py
+
+Compute helpers detect logical CPU cores, resolve worker-count policy, probe
+optional CuPy/CUDA support, and provide ordered parallel mapping plus progress
+aggregation.
+*/
+
+/**
+@page gps_ca_py app/dsp/gps_ca.py
+
+GPS C/A helpers generate the 1023-chip L1 C/A code for a PRN and sample it into
+a local replica at the active sample rate and code phase.
+*/
+
+/**
+@page utils_py app/dsp/utils.py
+
+Utility helpers support plotting and display: decimation, moving averages, FFT
+windows, averaged spectra, waterfall matrices, and compact bit-string formatting.
+*/
+
+/**
+@page demo_py app/dsp/demo.py
+
+Demo generation builds deterministic GPS-like baseband samples with PRN code,
+Doppler, code phase, noise, and LNAV-like data used by tests and the GUI demo
+workflow.
+*/
+
+/**
+@page concept_lab_py app/dsp/concept_lab.py
+
+The concept lab creates tiny synthetic signals for interactive teaching plots:
+code separability, Doppler effects, correlation profiles, and simplified BPSK
+behavior.
+*/
+
+/**
+@page session_py app/models/session.py
+
+The model module is the integration contract for the application. It contains
+dataclasses for session settings, file metadata, acquisition, tracking,
+navigation, benchmark, demo, and survey results.
+*/
+
+/**
+@page main_window_py app/gui/main_window.py
+
+The main window coordinates the application. It synchronizes GUI controls into
+SessionConfig, chooses RAM or windowed loading, launches worker jobs, validates
+processing contexts to avoid stale results, and forwards completed DSP products
+to tabs.
+*/
+
+/**
+@page workers_py app/gui/workers.py
+
+Worker helpers wrap heavy DSP callables in QRunnable objects and expose Qt
+signals for result, error, progress, log, and completion notifications.
+*/
+
+/**
+@page tabs app/gui/tabs
+
+GUI tabs render each workflow stage:
+
+- SessionTab: file, settings, backend status, progress, and logs.
+- RawSignalTab: time-domain IQ traces.
+- IQPlaneTab: IQ scatter and phasor views.
+- SpectrumTab: spectrum and waterfall diagnostics.
+- AcquisitionTab: heatmaps, PRN scans, sweeps, and sample-rate surveys.
+- TrackingTab: loop histories and IQ-stage views.
+- NavigationTab: bit decisions, LNAV words, subframes, and decoded fields.
+- PVTTab: observation, ephemeris, receiver-position, and time evidence.
+- BenchmarkTab: throughput and bottleneck results.
+- ConceptLabTab: synthetic GPS intuition plots.
+- LearningTab: compact explanation of current pipeline state.
+*/
