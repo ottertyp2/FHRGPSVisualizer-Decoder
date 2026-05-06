@@ -11,16 +11,24 @@
 \usepackage{listings}
 \usepackage{titlesec}
 \usepackage{url}
+\usepackage{xurl}
+\usepackage{microtype}
+\usepackage{ragged2e}
 
-\geometry{margin=2.4cm}
+\geometry{margin=2.1cm}
 \hypersetup{
   colorlinks=true,
   linkcolor=blue!55!black,
   urlcolor=blue!55!black
 }
+\urlstyle{same}
 \setlist{nosep}
 \setlength{\parskip}{0.45em}
 \setlength{\parindent}{0pt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.15}
+\emergencystretch=3em
+\sloppy
 \titleformat{\section}{\Large\bfseries}{\thesection}{0.6em}{}
 \titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
 \titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.6em}{}
@@ -33,9 +41,13 @@
   backgroundcolor=\color{black!3}
 }
 
-\newcommand{\codepath}[1]{\path{#1}}
-\newcommand{\apiitem}[2]{\item \texttt{#1}: #2}
-\newcommand{\apisym}[1]{\item \texttt{#1}}
+\newcommand{\codepath}[1]{\nolinkurl{#1}}
+\newcommand{\codeheading}[1]{\texorpdfstring{\codepath{#1}}{#1}}
+\newcommand{\codesym}[1]{\nolinkurl{#1}}
+\newcommand{\apiitem}[2]{\item \codesym{#1}: #2}
+\newcommand{\apisym}[1]{\item \codesym{#1}}
+\newcolumntype{L}[1]{>{\RaggedRight\arraybackslash}p{#1}}
+\newcolumntype{P}[1]{>{\RaggedRight\ttfamily\arraybackslash}p{#1}}
 
 \title{GPS L1 C/A Offline Decoder and Visualizer\\Code Documentation}
 \author{Fraunhofer FHR Educational GPS Decoder Repository}
@@ -65,7 +77,7 @@ The application is an offline, didactic GPS L1 C/A decoder and visualizer. Its c
 
 \section{Repository Layout}
 
-\begin{longtable}{>{\ttfamily}p{0.33\linewidth}p{0.60\linewidth}}
+\begin{longtable}{P{0.30\linewidth}L{0.64\linewidth}}
 \textbf{Path} & \textbf{Purpose}\\
 \hline
 \codepath{app/main.py} & Qt application entry point.\\
@@ -105,7 +117,7 @@ python -m app.main
 
 \section{DSP Package}
 
-\subsection{\codepath{app/dsp/acquisition.py}}
+\subsection{\codeheading{app/dsp/acquisition.py}}
 
 \textbf{Role.} Performs GPS L1 C/A acquisition over Doppler bins and code phase. It supports single-PRN acquisition, multi-PRN scans, search-center sweeps, and sample-rate surveys. The module emphasizes diagnosable repeated-segment evidence rather than only a single heatmap peak.
 
@@ -141,7 +153,7 @@ python -m app.main
   \apisym{acquisition_rank_key}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/benchmark.py}}
+\subsection{\codeheading{app/dsp/benchmark.py}}
 
 \textbf{Role.} Benchmarks file I/O and DSP components so the GUI can report whether the current laptop is suitable for large offline recordings.
 
@@ -153,7 +165,7 @@ python -m app.main
   \apiitem{\_system_info}{Collects lightweight system information.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/bitsync.py}}
+\subsection{\codeheading{app/dsp/bitsync.py}}
 
 \textbf{Role.} Converts millisecond prompt integrations from tracking into GPS navigation-bit decisions.
 
@@ -164,7 +176,7 @@ python -m app.main
   \apiitem{\_carrier_aligned_prompt_ms}{Applies simple BPSK phase alignment before bit integration.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/compute.py}}
+\subsection{\codeheading{app/dsp/compute.py}}
 
 \textbf{Role.} Centralizes CPU worker policy, optional CuPy/CUDA detection, and common parallel execution helpers.
 
@@ -187,7 +199,7 @@ python -m app.main
   \apiitem{parallel_ordered_map}{Runs independent tasks in parallel while preserving input order.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/concept_lab.py}}
+\subsection{\codeheading{app/dsp/concept_lab.py}}
 
 \textbf{Role.} Generates tiny deterministic GPS-like signals for the GUI concept lab so users can see carrier wipeoff, PRN separation, and correlation behavior without a real capture.
 
@@ -207,7 +219,7 @@ python -m app.main
   \apisym{\_component}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/demo.py}}
+\subsection{\codeheading{app/dsp/demo.py}}
 
 \textbf{Role.} Creates synthetic GPS-like baseband signals for demos and tests.
 
@@ -217,7 +229,7 @@ python -m app.main
   \apiitem{\_build_demo_nav_bits}{Constructs deterministic navigation bits with an LNAV-style preamble and valid parity words.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/ephemeris.py}}
+\subsection{\codeheading{app/dsp/ephemeris.py}}
 
 \textbf{Role.} Decodes GPS LNAV ephemerides from valid subframes and computes satellite clock corrections and ECEF positions. The implementation stays close to the broadcast equations so the math remains teachable.
 
@@ -238,7 +250,7 @@ python -m app.main
   \apiitem{rotate_ecef_for_transit(ecef_m, travel_time_s)}{Rotates transmit-time ECEF coordinates into the receive-time frame.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/gps_ca.py}}
+\subsection{\codeheading{app/dsp/gps_ca.py}}
 
 \textbf{Role.} Generates and samples GPS L1 C/A PRN codes.
 
@@ -249,7 +261,7 @@ python -m app.main
   \apiitem{code_phase_samples_to_chips(code_phase_samples, sample_rate)}{Converts a sample-index code phase into chips.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/io.py}}
+\subsection{\codeheading{app/dsp/io.py}}
 
 \textbf{Role.} Provides all raw IQ inspection and loading behavior for little-endian \texttt{complex64} recordings.
 
@@ -268,7 +280,7 @@ python -m app.main
   \apiitem{load_complex64_file_with_progress}{Loads an entire recording into RAM with progress reporting.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/navdecode.py}}
+\subsection{\codeheading{app/dsp/navdecode.py}}
 
 \textbf{Role.} Performs first-step GPS LNAV framing: preamble search, 30-bit word alignment, parity checks, conservative single-bit repair, TLM/HOW parsing, and GUI-ready subframe fields.
 
@@ -286,7 +298,7 @@ python -m app.main
   \apiitem{decode_navigation_from_tracking(tracking, bit_source, progress_callback=None, log_callback=None)}{Runs bit extraction and LNAV decoding from tracking output.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/pvt.py}}
+\subsection{\codeheading{app/dsp/pvt.py}}
 
 \textbf{Role.} Implements receiver position, velocity/time helper routines and the offline PVT builder that consumes decoded navigation evidence.
 
@@ -310,7 +322,7 @@ python -m app.main
   \apiitem{compute_pvt_from_navigation(tracking_by_prn, bit_results_by_prn, nav_results_by_prn, ...)}{Builds ephemerides, pseudoranges, receiver position, and GPS/UTC time.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/pvt_pipeline.py}}
+\subsection{\codeheading{app/dsp/pvt_pipeline.py}}
 
 \textbf{Role.} Wires existing DSP stages for the PVT tab: acquire several PRNs, track them, decode LNAV, then call the PVT computation layer.
 
@@ -321,7 +333,7 @@ python -m app.main
   \apiitem{\_pvt_session}{Builds a session variant for pipeline defaults.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/tracking.py}}
+\subsection{\codeheading{app/dsp/tracking.py}}
 
 \textbf{Role.} Implements the educational carrier/code tracking loop after acquisition. It supports RAM arrays and streamed file windows, CPU and optional GPU vector math, and PRN-specific diagnostics.
 
@@ -356,7 +368,7 @@ python -m app.main
   \apisym{\_iter_sample_blocks}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/tracking_gpu.py}}
+\subsection{\codeheading{app/dsp/tracking_gpu.py}}
 
 \textbf{Role.} Contains the optional CuPy raw kernel for tracking correlators. Keeping this file separate preserves a readable CPU-oriented teaching path in \codepath{tracking.py}.
 
@@ -365,7 +377,7 @@ python -m app.main
   \apiitem{get_tracking_correlator_kernel()}{Compiles and returns the optional CuPy E/P/L correlator kernel.}
 \end{itemize}
 
-\subsection{\codepath{app/dsp/utils.py}}
+\subsection{\codeheading{app/dsp/utils.py}}
 
 \textbf{Role.} Provides display-oriented DSP helpers for decimation, smoothing, windows, spectrum, waterfall, and bit formatting.
 
@@ -381,7 +393,7 @@ python -m app.main
 
 \section{Models}
 
-\subsection{\codepath{app/models/session.py}}
+\subsection{\codeheading{app/models/session.py}}
 
 \textbf{Role.} Defines the shared dataclasses that form the contract between GUI tabs, worker threads, DSP modules, and tests.
 
@@ -420,11 +432,11 @@ python -m app.main
 
 \section{GUI Package}
 
-\subsection{\codepath{app/main.py}}
+\subsection{\codeheading{app/main.py}}
 
 \textbf{Role.} Creates the Qt application, instantiates \texttt{MainWindow}, and starts the event loop through \texttt{main()}.
 
-\subsection{\codepath{app/gui/workers.py}}
+\subsection{\codeheading{app/gui/workers.py}}
 
 \textbf{Role.} Keeps long-running DSP actions off the UI thread.
 
@@ -433,7 +445,7 @@ python -m app.main
   \apiitem{Worker}{Generic \texttt{QRunnable} wrapper around a callable.}
 \end{itemize}
 
-\subsection{\codepath{app/gui/main_window.py}}
+\subsection{\codeheading{app/gui/main_window.py}}
 
 \textbf{Role.} Top-level Qt controller. It owns the session state, tab instances, loaded sample windows, background workers, and transitions between acquisition, tracking, navigation decode, and PVT.
 
@@ -470,7 +482,7 @@ python -m app.main
 
 \subsection{GUI Tabs}
 
-\begin{longtable}{>{\ttfamily}p{0.34\linewidth}p{0.58\linewidth}}
+\begin{longtable}{P{0.34\linewidth}L{0.58\linewidth}}
 \textbf{Path} & \textbf{Class and responsibility}\\
 \hline
 \codepath{app/gui/tabs/session_tab.py} & \texttt{SessionTab}: file loading, session parameters, RAM/backend status, progress, and log output.\\
@@ -486,7 +498,7 @@ python -m app.main
 \codepath{app/gui/tabs/learning_tab.py} & \texttt{LearningTab}: compact explanation of the current receiver pipeline state.\\
 \end{longtable}
 
-\subsection{\codepath{app/gui/tabs/acquisition_tab.py}}
+\subsection{\codeheading{app/gui/tabs/acquisition_tab.py}}
 
 \textbf{Notable methods.}
 \begin{itemize}
@@ -505,7 +517,7 @@ python -m app.main
   \apisym{build_search_centers}
 \end{itemize}
 
-\subsection{\codepath{app/gui/tabs/navigation_tab.py}}
+\subsection{\codeheading{app/gui/tabs/navigation_tab.py}}
 
 \textbf{Notable methods.}
 \begin{itemize}
@@ -516,7 +528,7 @@ python -m app.main
   \apisym{\_format_almanac_ephemeris}
 \end{itemize}
 
-\subsection{\codepath{app/gui/tabs/pvt_tab.py}}
+\subsection{\codeheading{app/gui/tabs/pvt_tab.py}}
 
 \textbf{Notable methods.}
 \begin{itemize}
@@ -531,7 +543,7 @@ python -m app.main
 
 The tests document expected behavior and guard against regressions in DSP math, large-file behavior, GUI source switching, optional acceleration, and repository policy.
 
-\begin{longtable}{>{\ttfamily}p{0.36\linewidth}p{0.56\linewidth}}
+\begin{longtable}{P{0.36\linewidth}L{0.56\linewidth}}
 \textbf{Test file} & \textbf{Coverage}\\
 \hline
 \codepath{app/tests/conftest.py} & Pytest import-path and Qt defaults.\\
@@ -555,21 +567,21 @@ The tests document expected behavior and guard against regressions in DSP math, 
 
 \section{Repository Tools}
 
-\subsection{\codepath{tools/check_git_sync.ps1}}
+\subsection{\codeheading{tools/check_git_sync.ps1}}
 
 \textbf{Role.} Quick pre-push verification helper for repository sync policy. It is intended to be run before sharing work when checking branch/remote state is useful.
 
-\subsection{\codepath{tools/install_git_hooks.ps1}}
+\subsection{\codeheading{tools/install_git_hooks.ps1}}
 
 \textbf{Role.} Installs local Git hooks from \codepath{.githooks/}. The repository currently includes a pre-push hook location.
 
-\subsection{\codepath{.githooks/pre-push}}
+\subsection{\codeheading{.githooks/pre-push}}
 
 \textbf{Role.} Enforces the repository sync convention at push time. When pushing to \texttt{origin}, it verifies that \texttt{origin} has at least two push URLs configured so GitHub and GitLab can receive the same commit.
 
 \section{Package Initializers}
 
-\begin{longtable}{>{\ttfamily}p{0.34\linewidth}p{0.58\linewidth}}
+\begin{longtable}{P{0.34\linewidth}L{0.58\linewidth}}
 \textbf{File} & \textbf{Description}\\
 \hline
 \codepath{app/__init__.py} & Declares the GPS L1 C/A offline decoder package.\\
