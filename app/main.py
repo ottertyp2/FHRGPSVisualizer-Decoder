@@ -15,7 +15,7 @@ def main() -> int:
 
     pg.setConfigOptions(antialias=True)
     app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("GPS L1 C/A Offline Decoder")
+    app.setApplicationName("GPS Decoder")
     window = MainWindow()
     window.show()
     return app.exec()

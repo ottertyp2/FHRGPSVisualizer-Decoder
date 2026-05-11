@@ -1,4 +1,4 @@
-"""Dataclasses used by the GPS L1 C/A offline decoder."""
+"""Dataclasses used by GPS Decoder."""
 
 from .session import (
     AcquisitionCandidate,

@@ -1,4 +1,4 @@
-# GPS L1 C/A Offline Decoder GUI
+# GPS Decoder
 
 An educational desktop tool for inspecting recorded GPS L1 C/A IQ data offline.
 

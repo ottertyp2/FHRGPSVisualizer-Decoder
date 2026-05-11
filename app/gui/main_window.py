@@ -64,7 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("GPS L1 C/A Offline Decoder")
+        self.setWindowTitle("GPS Decoder")
         self.resize(1400, 1000)
 
         self.thread_pool = QtCore.QThreadPool.globalInstance()

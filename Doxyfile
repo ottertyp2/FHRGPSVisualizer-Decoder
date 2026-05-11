@@ -1,11 +1,11 @@
-# Doxygen configuration for the GPS L1 C/A offline decoder.
+# Doxygen configuration for GPS Decoder.
 #
 # Generated documentation is written below docs/doxygen/ and is intentionally
 # ignored by Git. Commit the source documentation files, not generated HTML,
 # LaTeX, or search-index artifacts.
 
-PROJECT_NAME           = "GPS L1 C/A Offline Decoder"
-PROJECT_BRIEF          = "Educational offline GPS L1 C/A decoder and visualizer"
+PROJECT_NAME           = "GPS Decoder"
+PROJECT_BRIEF          = "Educational offline GPS decoder and visualizer"
 PROJECT_NUMBER         = "main"
 
 OUTPUT_DIRECTORY       = docs/doxygen
